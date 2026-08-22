@@ -9,6 +9,7 @@ use crate::config::ArcConfig;
 use crate::display;
 use crate::gemfile;
 use crate::signals::{FluxProject, SignalType};
+use uuid::Uuid;
 use runner::{ArcEnv, build_ld_library_path, inject_isolated_env, ruby_bin};
 
 // ─────────────────────────────────────────────
@@ -89,7 +90,7 @@ pub fn init(path: &Path) -> Result<()> {
         .context("config.toml の初期化に失敗しました")?;
 
     let signal = project.record(
-        SignalType::Init,
+        SignalType::ProjectCreated,
         json!({
             "path": path,
             "version": env!("CARGO_PKG_VERSION"),
@@ -98,7 +99,7 @@ pub fn init(path: &Path) -> Result<()> {
     )?;
 
     eprintln!("✨ Flux project initialized at {:?}", path);
-    eprintln!("   Signal: {} ({})", signal.id, signal.r_type);
+    eprintln!("   Signal: {} ({})", signal.id(), signal.name());
     eprintln!("   Ruby:   {} (change with `arc bootstrap <version>`)", config.ruby.version);
 
     Ok(())
@@ -114,7 +115,7 @@ pub fn state(json_output: bool, raw: bool, diff: bool, type_filter: Option<Strin
     let signals = project.read_signals()?;
 
     let filtered: Vec<_> = match &type_filter {
-        Some(t) => signals.iter().filter(|s| s.r_type == *t).collect(),
+        Some(t) => signals.iter().filter(|s| s.name() == *t).collect(),
         None    => signals.iter().collect(),
     };
 
@@ -150,8 +151,7 @@ pub fn exec(args: &[String]) -> Result<()> {
 
     runner::run_with_flux(
         &project,
-        SignalType::ExecStart,
-        SignalType::ExecEnd,
+        "exec",
         cmd,
         cmd_args,
         &cwd,
@@ -190,8 +190,7 @@ fn install_with(project: &FluxProject, cwd: &Path) -> Result<()> {
     let args = vec!["install".to_string()];
     runner::run_with_flux(
         project,
-        SignalType::InstallStart,
-        SignalType::InstallEnd,
+        "sync",
         "bundle",
         &args,
         cwd,
@@ -259,8 +258,7 @@ pub fn run(args: &[String]) -> Result<()> {
     let (cmd, cmd_args) = (&args[0], &args[1..]);
     runner::run_with_flux(
         &project,
-        SignalType::RunStart,
-        SignalType::RunEnd,
+        "run",
         cmd,
         cmd_args,
         &cwd,
@@ -335,9 +333,15 @@ pub fn shell() -> Result<()> {
     // ARC_SHELL=1 をセットしておくと、PS1 等でカスタマイズできる
     command.env("ARC_SHELL", "1");
 
+    // `arc shell` は寿命を持つサブシェル ⇒ session。sid が start と end を綴じる。
+    let sid = Uuid::now_v7().to_string();
     project.record(
-        SignalType::Custom("shell_enter".to_string()),
-        json!({ "shell": &shell_bin }),
+        SignalType::SessionStart,
+        json!({
+            "sid":   &sid,
+            "shell": &shell_bin,
+            "cwd":   cwd.to_string_lossy(),
+        }),
     )?;
 
     // インタラクティブシェルを起動。ユーザーが exit するまでブロック。
@@ -347,8 +351,12 @@ pub fn shell() -> Result<()> {
 
     let exit_code = status.code().unwrap_or(0);
     project.record(
-        SignalType::Custom("shell_exit".to_string()),
-        json!({ "exit_code": exit_code }),
+        SignalType::SessionEnd,
+        json!({
+            "sid":       &sid,
+            "exit_code": exit_code,
+            "how":       "clean",
+        }),
     )?;
 
     eprintln!();
@@ -377,7 +385,7 @@ pub fn add(gem_name: &str, version: Option<&str>) -> Result<()> {
     }
 
     project.record(
-        SignalType::Add,
+        SignalType::GemAdded,
         json!({ "gem": gem_name, "version": version }),
     )?;
 
@@ -408,7 +416,7 @@ pub fn remove(gem_name: &str) -> Result<()> {
     }
 
     project.record(
-        SignalType::Remove,
+        SignalType::GemRemoved,
         json!({ "gem": gem_name }),
     )?;
 
@@ -426,14 +434,14 @@ pub fn undo() -> Result<()> {
 
     // 既に取り消し済みのシグナル ID を収集する（所有型 String で保持）
     let already_undone: std::collections::HashSet<String> = signals.iter()
-        .filter(|s| s.r_type == "undo")
-        .filter_map(|s| s.payload["target_id"].as_str().map(String::from))
+        .filter(|s| s.name() == "operation:reverted")
+        .filter_map(|s| s.payload.get("target_id").and_then(|v| v.as_str()).map(String::from))
         .collect();
 
     // 最新の「未取り消し」の add/remove を探す
     let target = signals.iter().rev().find(|s| {
-        (s.r_type == "add" || s.r_type == "remove")
-            && !already_undone.contains(&s.id)
+        matches!(s.name().as_str(), "gem:added" | "gem:removed")
+            && !already_undone.contains(s.id())
     });
 
     let target = match target {
@@ -441,19 +449,19 @@ pub fn undo() -> Result<()> {
         None    => anyhow::bail!("取り消し可能な操作（add/remove）が見つかりません。"),
     };
 
-    let gem_name = target.payload["gem"].as_str()
+    let gem_name = target.payload.get("gem").and_then(|v| v.as_str())
         .context("シグナルに gem 名が含まれていません。")?;
 
-    eprintln!("⏪ Undo: {}", target.r_type);
+    eprintln!("⏪ Undo: {}", target.name());
 
     let gemfile_path = cwd.join("Gemfile");
-    match target.r_type.as_str() {
-        "add" => {
+    match target.name().as_str() {
+        "gem:added" => {
             eprintln!("   Removing '{}' from Gemfile...", gem_name);
             gemfile::remove_gem(&gemfile_path, gem_name)?;
         }
-        "remove" => {
-            let version = target.payload["version"].as_str();
+        "gem:removed" => {
+            let version = target.payload.get("version").and_then(|v| v.as_str());
             eprintln!("   Restoring '{}' to Gemfile...", gem_name);
             gemfile::add_gem(&gemfile_path, gem_name, version)?;
         }
@@ -461,10 +469,10 @@ pub fn undo() -> Result<()> {
     }
 
     project.record(
-        SignalType::Undo,
+        SignalType::OperationReverted,
         json!({
-            "target_id":   target.id,
-            "target_type": target.r_type,
+            "target_id":   target.id(),
+            "target_type": target.name(),
             "gem":         gem_name,
         }),
     )?;
@@ -538,7 +546,7 @@ pub fn bootstrap(version_arg: Option<&str>) -> Result<()> {
     cp_link_or_copy(&cache_dir, &ruby_dest)?;
 
     project.record(
-        SignalType::Bootstrap,
+        SignalType::RuntimeLinked,
         json!({
             "ruby_version": ruby_version,
             "cache_hit":    cache_hit,

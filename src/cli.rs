@@ -29,7 +29,7 @@ pub enum Commands {
         /// 直近の操作による差分を表示する
         #[arg(short, long)]
         diff: bool,
-        /// 指定した種別の Signal のみを抽出する (例: add, exec_start)
+        /// 指定した種別の Signal のみを抽出する。Flux の `type:event` 表記 (例: gem:added, cmd:end)
         #[arg(short, long, name = "TYPE")]
         r#type: Option<String>,
     },

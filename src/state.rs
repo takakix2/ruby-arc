@@ -5,11 +5,13 @@ use std::collections::HashMap;
 // State (Signal ログから再構築される環境状態)
 // ─────────────────────────────────────────────
 
-/// 個々のコマンド実行記録（exec_start + exec_end のペア）
+/// 個々のコマンド実行記録（`cmd:run` + `cmd:end` のペア）。
+/// 両者は同じ `id` を持つので、それが突き合わせの鍵になる。
 /// Phase 2 で `cwd`, `ended_at`, `start_id` の内容を利用予定。
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct Execution {
+    /// 表示用の 1 本のコマンドライン（新形式は `cmd`、旧形式は `command`+`args` を繋いだもの）
     pub command: String,
     pub args: Vec<String>,
     pub cwd: String,
@@ -47,6 +49,33 @@ pub struct FluxState {
     pub signal_count: usize,
 }
 
+/// レコードから表示用のコマンドラインを取り出す。
+///
+/// 新形式は `cmd` に 1 本の文字列として持っている。旧形式は `command` と `args` に
+/// 割れていたので、繋いで同じ形にする。
+fn command_line(signal: &Signal) -> String {
+    if let Some(cmd) = signal.payload.get("cmd").and_then(|v| v.as_str()) {
+        return cmd.to_string();
+    }
+    let prog = signal.payload.get("command")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let args = argv(signal);
+    if args.is_empty() {
+        prog.to_string()
+    } else {
+        format!("{} {}", prog, args.join(" "))
+    }
+}
+
+/// argv の忠実な形。`cmd` が潰した空白入りの引数はこちらに残っている。
+fn argv(signal: &Signal) -> Vec<String> {
+    signal.payload.get("args")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default()
+}
+
 impl FluxState {
     /// Signal のベクターから State を再構築する
     pub fn from_signals(signals: &[Signal]) -> Self {
@@ -58,13 +87,13 @@ impl FluxState {
             signal_count: signals.len(),
         };
 
-        // exec_start を一時的に保持する HashMap
+        // `cmd:run` を一時的に保持する HashMap（鍵 = 相関 id）
         let mut pending_starts: HashMap<String, &Signal> = HashMap::new();
 
         for signal in signals {
-            match signal.r_type.as_str() {
-                "init" => {
-                    state.initialized_at = Some(signal.timestamp.clone());
+            match signal.name().as_str() {
+                "project:created" => {
+                    state.initialized_at = Some(signal.ts.clone());
                     state.project_path = signal.payload.get("path")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
@@ -72,44 +101,38 @@ impl FluxState {
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
                 }
-                "exec_start" | "install_start" | "run_start" => {
-                    // For these start signals, we just store them to match with their corresponding end signals.
-                    // The actual logic for active_operation, history_count, etc., is not part of FluxState.
-                    pending_starts.insert(signal.id.clone(), signal);
+                "cmd:run" => {
+                    // 相方の `cmd:end` と突き合わせるまで置いておく。
+                    pending_starts.insert(signal.id().to_string(), signal);
                 }
-                "exec_end" | "install_end" | "run_end" => {
-                    // For these end signals, we process them similarly to exec_end.
-                    // The logic for active_operation, last_exit_code, etc., is not part of FluxState.
-                    let ref_id = signal.payload.get("ref_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-
-                    let start_signal = pending_starts.remove(ref_id);
+                "cmd:end" => {
+                    // 新形式は `cmd:run` と同じ `id`、旧形式は `ref_id` が始端を指す。
+                    let start_signal = pending_starts.remove(signal.correlation_id());
 
                     let (command, args, cwd, started_at, start_id) = if let Some(start) = start_signal {
-                        let cmd = start.payload.get("command")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown")
-                            .to_string();
-                        let args = start.payload.get("args")
-                            .and_then(|v| v.as_array())
-                            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                            .unwrap_or_default();
-                        let cwd = start.payload.get("cwd")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        (cmd, args, cwd, start.timestamp.clone(), start.id.clone())
+                        (
+                            command_line(start),
+                            argv(start),
+                            start.payload.get("cwd")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            start.ts.clone(),
+                            start.id().to_string(),
+                        )
                     } else {
-                        ("unknown".to_string(), vec![], String::new(), String::new(), String::new())
+                        // 始端を失った終端でも、`cmd:end` 自身がコマンドラインを持っている。
+                        (command_line(signal), argv(signal), String::new(), String::new(), String::new())
                     };
 
                     let exit_code = signal.payload.get("exit_code")
                         .and_then(|v| v.as_i64());
                     let success = signal.payload.get("success")
                         .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                    let duration_ms = signal.payload.get("duration_ms")
+                        .unwrap_or_else(|| exit_code == Some(0));
+                    // 綴りは `ms`（家族の綴り）。`duration_ms` は arc の旧綴り。
+                    let duration_ms = signal.payload.get("ms")
+                        .or_else(|| signal.payload.get("duration_ms"))
                         .and_then(|v| v.as_u64());
 
                     state.executions.push(Execution {
@@ -120,7 +143,7 @@ impl FluxState {
                         success,
                         duration_ms,
                         started_at,
-                        ended_at: Some(signal.timestamp.clone()),
+                        ended_at: Some(signal.ts.clone()),
                         start_id,
                     });
                 }
@@ -130,30 +153,22 @@ impl FluxState {
             }
         }
 
-        // 未完了の exec_start (SIGKILL 等で exec_end がない) を orphan として記録
+        // 未完了の `cmd:run` (SIGKILL 等で `cmd:end` がない) を orphan として記録
         for (_id, start) in pending_starts {
-            let cmd = start.payload.get("command")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            let args = start.payload.get("args")
-                .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                .unwrap_or_default();
             let cwd = start.payload.get("cwd")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
             state.executions.push(Execution {
-                command: cmd,
-                args,
+                command: command_line(start),
+                args: argv(start),
                 cwd,
                 exit_code: None,
                 success: false,
                 duration_ms: None,
-                started_at: start.timestamp.clone(),
+                started_at: start.ts.clone(),
                 ended_at: None,
-                start_id: start.id.clone(),
+                start_id: start.id().to_string(),
             });
         }
 

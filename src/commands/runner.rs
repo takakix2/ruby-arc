@@ -7,6 +7,7 @@ use std::process::Command;
 use std::time::Instant;
 
 use crate::signals::{ARC_ENV_DIR, FluxProject, SignalType};
+use uuid::Uuid;
 
 /// プロセスの環境モード。
 /// `Isolated` は `.arc/env` を GEM_HOME として使用し、
@@ -131,26 +132,33 @@ pub fn build_rubylib_path(env_path: &Path) -> Option<OsString> {
 /// `exec`, `install`, `run` の共通ロジックを一元化する。
 pub fn run_with_flux(
     project: &FluxProject,
-    start_type: SignalType,
-    end_type: SignalType,
+    verb: &str,
     cmd: &str,
     args: &[String],
     cwd: &Path,
     env_mode: ArcEnv,
 ) -> Result<()> {
-    // シグナルに記録する環境コンテキスト
-    let env_context = match env_mode {
-        ArcEnv::Isolated => json!({ "mode": "isolated", "GEM_HOME": ARC_ENV_DIR }),
-        ArcEnv::System   => json!({ "mode": "system" }),
+    // `cmd:run` / `cmd:end` は同じ `id` を名乗ることで綴じられる。
+    // 終端が始端を指すのではなく、両者が同じ鍵を持つ —— hsh の journal と同じ相関モデル。
+    let id = Uuid::now_v7().to_string();
+
+    // 家族の綴りに合わせた 1 本のコマンドライン。argv の忠実な形は `args` に残す
+    // （空白を含む引数はここで潰れるが、`args` を引けば元が取れる）。
+    let cmd_line = crate::display::fmt_cmd(cmd, args);
+    let env_mode_name = match env_mode {
+        ArcEnv::Isolated => "isolated",
+        ArcEnv::System   => "system",
     };
 
-    let start_signal = project.record(
-        start_type,
+    project.record(
+        SignalType::CmdRun,
         json!({
-            "command": cmd,
-            "args": args,
-            "cwd": cwd.to_string_lossy(),
-            "env_context": env_context,
+            "id":       &id,
+            "cmd":      &cmd_line,
+            "args":     args,
+            "cwd":      cwd.to_string_lossy(),
+            "verb":     verb,
+            "env_mode": env_mode_name,
         }),
     )?;
 
@@ -167,16 +175,20 @@ pub fn run_with_flux(
         .status()
         .map_err(|e| anyhow::anyhow!("コマンド '{}' の起動に失敗しました: {}", cmd, e))?;
 
-    let duration_ms = timer.elapsed().as_millis() as u64;
+    let ms = timer.elapsed().as_millis() as u64;
     let exit_code = status.code().unwrap_or(1);
 
     project.record(
-        end_type,
+        SignalType::CmdEnd,
         json!({
-            "ref_id": start_signal.id,
-            "exit_code": exit_code,
-            "success": status.success(),
-            "duration_ms": duration_ms,
+            "id":         &id,
+            "cmd":        &cmd_line,
+            "exit_code":  exit_code,
+            "success":    status.success(),
+            "ms":         ms,
+            "cwd":        cwd.to_string_lossy(),
+            "verb":       verb,
+            "env_mode":   env_mode_name,
         }),
     )?;
 
