@@ -10,21 +10,21 @@
 **Goal**: Prove that Event Sourcing works for CLI tools.
 
 - [x] `FluxProject` struct with init/open lifecycle
-- [x] Signal schema: `id` (UUID v7), `type`, `payload` (JSON Value), `timestamp`
+- [x] Signal schema — superseded 2026-08-22 by the [Flux Protocol v1](https://git.navii.online/takaki2/flux-protocol) envelope (`v` / `source` / `type` / `event` / `ts`, payload flat). The original shape was `id` (UUID v7), `type`, `payload`, `timestamp`.
 - [x] Append-only NDJSON log (`.flux/signals.jsonl`)
 - [x] `arc init` — project initialization with duplicate prevention
-- [x] `arc exec` — command execution with start/end correlation (`ref_id`)
+- [x] `arc exec` — command execution with start/end correlation (a shared `id` since 2026-08-22; `ref_id` before that)
 - [x] `arc state` — human-readable signal table
 - [x] `arc state --json` — machine-readable JSON output
-- [x] Performance tracking (`duration_ms` on every execution)
+- [x] Performance tracking (`ms` on every execution; `duration_ms` before 2026-08-22)
 - [x] Unicode-safe display truncation
 - [x] stderr/stdout separation (data on stdout, status on stderr)
 
 ---
 
-## Phase 2: State Machine 🔜
+## Phase 2: State Machine ✅
 
-**Status**: Next
+**Status**: Core done (`578f23c`, `src/state.rs`) — checkpoints still open
 **Goal**: Transform raw signal logs into meaningful environment states.
 
 ### 2.1 State Definition
@@ -81,9 +81,9 @@ $ arc checkpoint diff "before-upgrade"
 
 ### Deliverables
 
-- [ ] `FluxState` struct and reconstruction logic
-- [ ] `arc state --full` (rich state display)
-- [ ] Signal filtering (`--type`, `--since`, `--until`)
+- [x] `FluxState` struct and reconstruction logic (`src/state.rs`)
+- [x] `arc state` reconstruction, statistics, and `--diff`
+- [x] Signal filtering by kind (`--type cmd:end`) — `--since` / `--until` still open
 - [ ] Checkpoint create/list/diff
 - [ ] Custom state reducers (user-defined signal → state rules)
 
@@ -104,7 +104,7 @@ $ arc replay signals.jsonl
 $ arc replay signals.jsonl --dry-run
 
 # Replay only specific signal types
-$ arc replay signals.jsonl --type exec_start
+$ arc replay signals.jsonl --type cmd:run
 ```
 
 ### 3.2 Diff & Drift Detection
@@ -167,8 +167,11 @@ $ exit
 **Implementation**:
 - `inject_isolated_env()` in `runner.rs` handles all env-var setup (shared with `arc run`)
 - `ARC_SHELL=1` is set so PS1/PROMPT etc. can detect the sub-shell
-- `shell_enter` / `shell_exit` signals recorded in `.flux/signals.jsonl`
-- `SignalType::Custom(String)` added to support free-form signal types
+- `session:start` / `session:end` signals recorded in `.flux/signals.jsonl`, tied by a `sid`
+  (recorded as `shell_enter` / `shell_exit` until 2026-08-22)
+- ⚠️ `SignalType::Custom(String)` was added here to support free-form signal types, and
+  **it was removed on 2026-08-22**: the names it produced carried underscores, which
+  Flux v1 §3/§4 forbid. The enum is now the only way to name a signal.
 
 **Design decision**: Safety over convenience.
 - No global PATH pollution.
@@ -195,7 +198,7 @@ use flux_core::FluxProject;
 use serde_json::json;
 
 let project = FluxProject::init(".")?;
-project.record("deploy", json!({"target": "production"}))?;
+project.record(SignalType::CmdRun, json!({"cmd": "deploy", "target": "production"}))?;
 ```
 
 ### 4.2 Language Bindings
@@ -210,9 +213,15 @@ project.record("deploy", json!({"target": "production"}))?;
 - **MCP Server**: AI agents can record/query signals directly
 - **GitHub Action**: Automatically record CI/CD operations
 
-### 4.4 Flux Protocol Specification
+### 4.4 Flux Protocol Specification ✅
 
-Formalize the signal schema and state machine rules as an open specification. Enable interoperability between different Flux-compatible tools.
+**Done — and it left home.** This deliverable became its own repository,
+[`flux-protocol`](https://git.navii.online/takaki2/flux-protocol): `spec/PROTOCOL_v1.md`,
+`schema/flux-envelope.v1.schema.json`, and a Signal Registry keyed by `type:event`.
+It is now spoken by `hsh`, `Doxa`, `watchtower`, `Tabula` and `flux-ship`.
+
+🚨 **The envelope changed while it was away**, so arc — the parent — could not read
+what its children speak. arc moved onto the v1 envelope on 2026-08-22; see `HANDOFF.md`.
 
 ### Deliverables
 
@@ -221,7 +230,9 @@ Formalize the signal schema and state machine rules as an open specification. En
 - [ ] Node.js bindings (napi-rs)
 - [ ] VS Code extension (signal timeline visualization)
 - [ ] MCP Server for AI agent integration
-- [ ] Flux Protocol v1 specification document
+- [x] Flux Protocol v1 specification document — shipped as its own repo, `flux-protocol`
+- [ ] Register arc's own signals (`project:created`, `gem:*`, `runtime:linked`,
+      `operation:reverted`) in that repo's Signal Registry
 
 ---
 
