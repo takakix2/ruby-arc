@@ -25,7 +25,7 @@ arc の ROADMAP Phase 4.4 に「Flux Protocol v1 specification document」とい
 🚨 **独立した先で envelope が変わり、親の arc だけが取り残されていた。**
 2026-08-22 にそれを解消した（下記）。
 
-## 2026-08-22 セッション — envelope 移行 + 腐り掃除（全て未コミット）
+## 2026-08-22 セッション — envelope 移行 + 腐り掃除（`flux-v1-envelope` ブランチ・4 commit）
 
 6 か月休眠（最終コミット `45e2fcb` 2026-02-24）からの再開。
 
