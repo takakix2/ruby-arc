@@ -176,9 +176,21 @@ push は成功していた**。⇒ ディレクトリ（`~/dev/ruby-arc`）・�
 6. **`.github/` が残っている** — GitHub Sponsors の funding config（`c24d44b`）。
    公開先は Gitea なので、実態と合っているか要確認。
 
-7. 🚨 **m4air の clone が取り残されている** —— `~/dev/arc`（旧名・旧位置）で、しかも
-   **2026-08-26 に削除した `flux-v1-envelope`** を指している。要: ディレクトリ移設 +
-   `set-url` ×2 + 枝の削除 + pull。⚠️ **旧 URL が生きているので無警告でズレ続ける**。
+7. ✅ **m4air の clone を合わせた**（2026-08-26）—— `~/dev/arc` → `~/dev/ruby-arc`、
+   `origin` を `gitea:takaki2/ruby-arc.git` へ、`github` を追加、`flux-v1-envelope` を削除
+   （`origin/main..HEAD` が空＝取り残しゼロを確かめてから）、`main` を `fef1e99` まで ff。
+   ✅ **GitHub 鍵も通した**（同日）—— `~/.ssh/config` に `Host github.com` を足し、
+   **m4air の公開鍵を GitHub に登録**した（`ssh -T` → `Hi takakix2!`）。`main` の追跡先も
+   blackcube と同じ `github/main` に揃え、`origin/main` = `github/main` = `main` = `fef1e99` を実測。
+   🚨 **config のコピーだけでは直らなかった** —— `IdentityFile ~/.ssh/id_ed25519` は
+   **各機の既定鍵**を指す相対的な綴りで、2 台の `id_ed25519` は**別の鍵**だった
+   （`lkDW…`=blackcube / `jKRn…`=m4air）。⇒ 同じ config が機械ごとに違う鍵を意味する。
+
+8. 🚨 **「片方だけに push」は 2 台とも塞がっていない** —— remote が 2 つあるのに
+   **どちらのマシンも dual-push を設定していない**（`remote.*.pushurl` は両機とも空・実測）。
+   ∴ 上の「次に潜る人が古い方から枝を切る」は**まだ構造的に起きる**。
+   塞ぐなら `git remote set-url --add --push github <両方の URL>` で 1 回の push を
+   両フォージへ流すか、正本を一本化するかの判断が要る。
 
 ## 関連
 
