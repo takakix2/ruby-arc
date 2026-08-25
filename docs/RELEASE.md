@@ -65,5 +65,5 @@ curl -sSf https://arc.example.com/install.sh | sh
 
 ## 参照リポジトリ
 
-- `arc`: `ssh://git@192.168.1.10:222/takaki2/arc.git` / `github.com:takakix2/ruby-arc`
+- `ruby-arc`: `ssh://git@192.168.1.10:222/takaki2/ruby-arc.git` / `github.com:takakix2/ruby-arc`
 - `rsh`: `ssh://git@192.168.1.10:222/takaki2/rsh.git` / `github.com:takakix2/rsh`

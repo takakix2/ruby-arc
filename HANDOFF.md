@@ -5,7 +5,7 @@
 > ②**Flux Core**（全操作を append-only NDJSON で記録し状態を再構築する event sourcing）。
 > ⭐ **この repo が Flux Protocol の親**。詳しくは下の「系譜」。
 
-- remote: `gitea:takaki2/arc.git`（SSH alias 経由）。branch `main`。
+- remote: `gitea:takaki2/ruby-arc.git`（SSH alias 経由）。branch `main`。
 - ビルド: `cargo build`（edition 2024・cargo 1.95.0 で緑・clippy 警告 0）。
 - 🚨 **m4air では Ruby を要する経路が試せない**。このマシンは system ruby 2.6.10 のみ
   （rbenv 無し）で、arc は 3.2+ 相当を前提にする。`bootstrap` / `sync` / `add` / `remove`
