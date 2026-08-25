@@ -57,8 +57,8 @@ But arc goes further than `uv`:
 
 ```bash
 # Build from source
-git clone https://github.com/yourname/arc.git
-cd arc && cargo build --release
+git clone https://github.com/yourname/ruby-arc.git
+cd ruby-arc && cargo build --release
 cp target/release/arc ~/.local/bin/
 
 # Start a new Ruby project

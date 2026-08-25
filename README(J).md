@@ -57,8 +57,8 @@ arc は **[Flux Core](#アーキテクチャ-flux-core)** — ターミナルの
 
 ```bash
 # ソースからビルド
-git clone https://github.com/yourname/arc.git
-cd arc && cargo build --release
+git clone https://github.com/yourname/ruby-arc.git
+cd ruby-arc && cargo build --release
 cp target/release/arc ~/.local/bin/
 
 # 新しい Ruby プロジェクトを開始
