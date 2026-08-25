@@ -1,11 +1,15 @@
-# arc 引き継ぎメモ
+# ruby-arc（旧 arc）引き継ぎメモ
 
-> **arc = Ruby 版 uv**。Rust 製 CLI（`src/` 約 1,900 行）。二枚看板で、
+> **ruby-arc = Ruby 版 uv**。⚠️ **リポ名は 2026-08-26 に `arc` → `ruby-arc` へ改名**
+> （両フォージとも旧 URL がリダイレクトで生きているので、古い clone は気づけない）。
+> **打つコマンドは `arc` のまま**（バイナリ名は変えていない）。Rust 製 CLI（`src/` 約 1,900 行）。二枚看板で、
 > ①Ruby のツールチェーン（隔離環境・グローバル hardlink キャッシュ・shim 拒否）と
 > ②**Flux Core**（全操作を append-only NDJSON で記録し状態を再構築する event sourcing）。
 > ⭐ **この repo が Flux Protocol の親**。詳しくは下の「系譜」。
 
-- remote: `gitea:takaki2/ruby-arc.git`（SSH alias 経由）。branch `main`。
+- remote: `gitea:takaki2/ruby-arc.git`（SSH alias 経由）**＋ `github.com:takakix2/ruby-arc`**。
+  ⚠️ **remote が 2 つある**（`main` の追跡先は `github`）。片方だけに push すると、
+  次に潜る人が**古い方から枝を切る**。実際にそれが起きた（下の 2026-08-26 の節）。branch `main` のみ。
 - ビルド: `cargo build`（edition 2024・cargo 1.95.0 で緑・clippy 警告 0）。
 - 🚨 **m4air では Ruby を要する経路が試せない**。このマシンは system ruby 2.6.10 のみ
   （rbenv 無し）で、arc は 3.2+ 相当を前提にする。`bootstrap` / `sync` / `add` / `remove`
@@ -114,6 +118,40 @@ issue を立てること（下の follow-up 1）。
   「arc が何を出すか」だけを書く形に（写しを置くと必ず片方が腐る）。
 - README / README(J) / cli.rs の `--type` ヘルプも新しい綴りに追随。
 
+## 2026-08-26 セッション — ブランチを main へ着地 ＋ `ruby-arc` へ改名追随
+
+**`flux-v1-envelope` は main に入った**（`2dfb6a0`・`--no-ff`・衝突ゼロ・14 ファイル / +659 −480）。
+⚠️ それまで **`main` に `HANDOFF.md` が存在しなかった** ＝ この文書ごとブランチに隠れていた。
+
+**検証**: `cargo build` exit 0 / `cargo test` 8 passed 0 failed / `cargo clippy --all-targets` 警告 0。
+
+### 🚨 なぜ枝が古い所から生えていたか — remote が 2 つで、Gitea 側が 5 か月古かった
+
+8/22 のセッションは **Gitea の `origin/main`（`45e2fcb`・2026-02-24）から枝を切った**。
+`main` の追跡先は `github/main`（`27acece`・7/03）だったので、**`ruby` gitlink の untrack を
+二重にやっていた**（`27acece` と `967fcb5`）。マージでは no-op になったので実害は出ていない。
+
+⭐ **両 remote を `8347411` で揃えた**（Gitea 側は 5 か月ぶんの断絶が解消）。
+
+### 改名（`arc` → `ruby-arc`）
+
+push したら GitHub が `This repository moved` と答えた —— **旧 URL がリダイレクトで生きており、
+push は成功していた**。⇒ ディレクトリ（`~/dev/ruby-arc`）・両 remote URL・README ×2 の clone 手順・
+`docs/RELEASE.md`・この文書の remote 行を揃えた。旧名の残骸は全文検索で **0 件**。
+
+📏 **名乗り方が非対称**（同じ日に 4 通り実測）:
+
+| | ref が動く push | no-op push |
+|---|---|---|
+| **GitHub** | ⭐ 移動を名乗る（新 URL 付き） | 黙る |
+| **Gitea** | 🚨 黙る（`To …` も旧 URL のまま） | 黙る |
+
+⚠️ **`git ls-remote` は両方黙る**（旧 URL で新しい SHA を返す）＝ **取る側は最後まで無警告**。
+∴ `git remote -v` を目で見るか、新旧 URL の `ls-remote` が同じ SHA を返すかで突き合わせる。
+
+⚠️ **バイナリ名は `arc` のまま**。README も `arc init .` のまま ——
+**人が打つ名前はリポ名とは別の決定**なので、改名に巻き込んでいない。
+
 ## Follow-Ups
 
 1. ✅ **flux-protocol に issue を立てた** —
@@ -137,6 +175,10 @@ issue を立てること（下の follow-up 1）。
    🚨 **rsh 側の `HANDOFF.md` にはこの話が一切無い**ので、rsh に潜っただけでは見えない。
 6. **`.github/` が残っている** — GitHub Sponsors の funding config（`c24d44b`）。
    公開先は Gitea なので、実態と合っているか要確認。
+
+7. 🚨 **m4air の clone が取り残されている** —— `~/dev/arc`（旧名・旧位置）で、しかも
+   **2026-08-26 に削除した `flux-v1-envelope`** を指している。要: ディレクトリ移設 +
+   `set-url` ×2 + 枝の削除 + pull。⚠️ **旧 URL が生きているので無警告でズレ続ける**。
 
 ## 関連
 
