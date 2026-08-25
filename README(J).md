@@ -181,11 +181,11 @@ arc は **Flux Core** の上に構築されています — CLI ツールのた�
 ├─────┴─────────┴──────────┴──────────┴──────────┴────┤
 │                   Flux Core エンジン                  │
 │  ┌─────────────────┐  ┌──────────────────────────┐  │
-│  │  FluxProject    │  │  Signal (NDJSON)          │  │
-│  │  .init()        │  │  - id: UUID v7            │  │
-│  │  .open()        │  │  - type: SignalType       │  │
-│  │  .record()      │  │  - payload: JSON          │  │
-│  │  .read()        │  │  - timestamp: RFC3339     │  │
+│  │  FluxProject    │  │  Signal (Flux v1 NDJSON)  │  │
+│  │  .init()        │  │  - v: 1                   │  │
+│  │  .open()        │  │  - source: "arc"          │  │
+│  │  .record()      │  │  - type / event           │  │
+│  │  .read()        │  │  - ts: RFC 3339           │  │
 │  └─────────────────┘  └──────────────────────────┘  │
 ├─────────────────────────────────────────────────────┤
 │              .flux/signals.jsonl                     │
@@ -195,18 +195,27 @@ arc は **Flux Core** の上に構築されています — CLI ツールのた�
 
 ### Signal とは？
 
-arc が実行するすべての操作は、1つ以上の **Signal** を発行します — 追記専用ログに書き込まれる、構造化された不変のイベントです。
+arc が実行するすべての操作は、1つ以上の **Signal** を発行します — 追記専用ログに書き込まれる、構造化された不変のイベントです。1 行が [Flux Protocol v1](https://git.navii.online/takaki2/flux-protocol) の NDJSON レコード 1 件にあたります。
 
 ```json
-{"id":"019c70b2-2f24-7902-9f98-6548079e4fa5","type":"add_start","payload":{"gem":"rails","version":null},"timestamp":"2026-02-18T21:20:00+09:00"}
-{"id":"019c70b2-3a11-7f01-b178-bd89a26ed073","type":"add_end","payload":{"ref_id":"019c70b2-2f24-7902-9f98-6548079e4fa5","success":true,"duration_ms":4200,"cache_hit":false},"timestamp":"2026-02-18T21:20:04+09:00"}
+{"v":1,"source":"arc","type":"gem","event":"added","ts":"2026-08-22T07:30:15.177395+00:00","id":"019c70b2-5c33-7d03-9911-112233445566","gem":"rails","version":"~> 8.0"}
+{"v":1,"source":"arc","type":"cmd","event":"run","ts":"2026-08-22T07:30:15.186032+00:00","id":"019c70b2-3a11-7f01-b178-bd89a26ed073","cmd":"bundle install","args":["install"],"cwd":"/proj","verb":"sync","env_mode":"isolated"}
+{"v":1,"source":"arc","type":"cmd","event":"end","ts":"2026-08-22T07:30:19.386032+00:00","id":"019c70b2-3a11-7f01-b178-bd89a26ed073","cmd":"bundle install","exit_code":0,"ms":4200,"success":true,"verb":"sync","env_mode":"isolated"}
 ```
 
 主な特性：
-- **UUID v7** — 時刻順にソート可能、グローバルに一意
-- **相関付き** — `add_end` は `ref_id` で `add_start` にリンクされる
-- **追記専用** — Signal は変更・削除されない
-- **構造化** — すべてのペイロードは型付き JSON（自由形式のテキストではない）
+- **必須 4 フィールド** — `v` / `source` / `type` / `event`。残りはすべて payload で、同じ行にトップレベルで並ぶ。
+- **`type` は名詞、`event` はそれに起きたこと** — `gem:added`, `cmd:run`, `session:end`。小文字ケバブケースで、この組が Signal Registry の鍵になる。
+- **UUID v7 の `id`** — 時刻順にソート可能、グローバルに一意。
+- **同じ `id` で相関する** — `cmd:run` と `cmd:end` は**同じ** `id` を持つ。終端が始端を指すのではなく、両者が同じ鍵を名乗る（`hsh` と同じ相関モデル）。
+- **`ts` は出来事が起きた時刻** — RFC 3339 + 明示的オフセット、生産者の時計（[`PROTOCOL_v1.md` §2.05](https://git.navii.online/takaki2/flux-protocol)）。
+- **追記専用** — Signal は変更・削除されない。
+
+> **古いログを読むこと。** 2026-08-22 より前に書かれた journal は arc の
+> プロトコル以前の形（`{id, type, payload, timestamp}`・`add_start` 等の綴り）です。
+> arc はそれを透過的に読みます —— 旧 `type` を `type:event` の組に翻訳し、時刻は
+> `ts ?? modified ?? timestamp` の順で取ります（プロトコルがまさにこの移行のために
+> 定めたフォールバック順）。**改名は歴史を直さない**ので、これは一時的な措置ではありません。
 
 ### なぜイベントソーシングなのか？
 
@@ -216,9 +225,9 @@ arc が実行するすべての操作は、1つ以上の **Signal** を発行し
 
 | 機能 | 仕組み |
 |---|---|
-| `arc undo` | Signal ログを逆走して最後の `add`/`remove` を見つけ、取り消す |
+| `arc undo` | Signal ログを逆走して最後の `gem:added`/`gem:removed` を見つけ、取り消す |
 | `arc state --diff` | 連続する Signal に保存された Gemfile のスナップショットを比較 |
-| `arc state` 統計 | コマンド別に `exec_end` Signal を集計し、成功/失敗を数える |
+| `arc state` 統計 | コマンドライン別に `cmd:end` Signal を集計し、成功/失敗を数える |
 | 将来: リプレイ | 新しいマシンで Signal を再発行して環境を再現 |
 | 将来: AI 監査 | Signal ログを LLM に渡して、何が起きてなぜ起きたかを説明させる |
 

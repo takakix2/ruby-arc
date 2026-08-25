@@ -102,6 +102,7 @@ arc state --diff
 | `arc state` | Show full operation history and statistics |
 | `arc state --diff` | Show what changed in the last operation |
 | `arc state --json` | Machine-readable output (pipe to `jq`) |
+| `arc state --type <type:event>` | Show only one kind of signal (e.g. `cmd:end`, `gem:added`) |
 
 ---
 
@@ -191,11 +192,11 @@ arc is built on **Flux Core** — a general-purpose event sourcing engine for CL
 ├─────┴─────────┴──────────┴──────────┴──────────┴────┤
 │                   Flux Core Engine                   │
 │  ┌─────────────────┐  ┌──────────────────────────┐  │
-│  │  FluxProject    │  │  Signal (NDJSON)          │  │
-│  │  .init()        │  │  - id: UUID v7            │  │
-│  │  .open()        │  │  - type: SignalType       │  │
-│  │  .record()      │  │  - payload: JSON          │  │
-│  │  .read()        │  │  - timestamp: RFC3339     │  │
+│  │  FluxProject    │  │  Signal (Flux v1 NDJSON)  │  │
+│  │  .init()        │  │  - v: 1                   │  │
+│  │  .open()        │  │  - source: "arc"          │  │
+│  │  .record()      │  │  - type / event           │  │
+│  │  .read()        │  │  - ts: RFC 3339           │  │
 │  └─────────────────┘  └──────────────────────────┘  │
 ├─────────────────────────────────────────────────────┤
 │              .flux/signals.jsonl                     │
@@ -205,18 +206,28 @@ arc is built on **Flux Core** — a general-purpose event sourcing engine for CL
 
 ### What is a Signal?
 
-Every operation arc performs emits one or more **Signals** — structured, immutable events written to an append-only log.
+Every operation arc performs emits one or more **Signals** — structured, immutable events written to an append-only log. A signal is one line of [Flux Protocol v1](https://git.navii.online/takaki2/flux-protocol) NDJSON.
 
 ```json
-{"id":"019c70b2-2f24-7902-9f98-6548079e4fa5","type":"add_start","payload":{"gem":"rails","version":null},"timestamp":"2026-02-18T21:20:00+09:00"}
-{"id":"019c70b2-3a11-7f01-b178-bd89a26ed073","type":"add_end","payload":{"ref_id":"019c70b2-2f24-7902-9f98-6548079e4fa5","success":true,"duration_ms":4200,"cache_hit":false},"timestamp":"2026-02-18T21:20:04+09:00"}
+{"v":1,"source":"arc","type":"gem","event":"added","ts":"2026-08-22T07:30:15.177395+00:00","id":"019c70b2-5c33-7d03-9911-112233445566","gem":"rails","version":"~> 8.0"}
+{"v":1,"source":"arc","type":"cmd","event":"run","ts":"2026-08-22T07:30:15.186032+00:00","id":"019c70b2-3a11-7f01-b178-bd89a26ed073","cmd":"bundle install","args":["install"],"cwd":"/proj","verb":"sync","env_mode":"isolated"}
+{"v":1,"source":"arc","type":"cmd","event":"end","ts":"2026-08-22T07:30:19.386032+00:00","id":"019c70b2-3a11-7f01-b178-bd89a26ed073","cmd":"bundle install","exit_code":0,"ms":4200,"success":true,"verb":"sync","env_mode":"isolated"}
 ```
 
 Key properties:
-- **UUID v7** — time-sortable, globally unique
-- **Correlated** — `add_end` links back to `add_start` via `ref_id`
-- **Append-only** — signals are never modified or deleted
-- **Structured** — every payload is typed JSON, not free-form text
+- **Four required fields** — `v`, `source`, `type`, `event`. Everything else is payload, flat on the same line.
+- **`type` is a noun, `event` is what happened to it** — `gem:added`, `cmd:run`, `session:end`. Lowercase kebab-case; the pair is how the Signal Registry is keyed.
+- **UUID v7 `id`** — time-sortable, globally unique.
+- **Correlated by a shared `id`** — `cmd:run` and `cmd:end` carry the **same** `id`, so a pair is a group-by rather than a pointer chase. This is the same correlation model `hsh` uses.
+- **`ts` is when it happened**, RFC 3339 with an explicit offset, on the producer's clock ([`PROTOCOL_v1.md` §2.05](https://git.navii.online/takaki2/flux-protocol)).
+- **Append-only** — signals are never modified or deleted.
+
+> **Reading older logs.** Journals written before 2026-08-22 use arc's pre-protocol
+> shape (`{id, type, payload, timestamp}`, with names like `add_start`). arc reads
+> those transparently — the old `type` is translated to a `type:event` pair and the
+> time is taken as `ts ?? modified ?? timestamp`, the fallback order the protocol
+> specifies for exactly this migration. **Renaming does not fix history**, so this
+> is not a temporary measure.
 
 ### Why Event Sourcing?
 
@@ -226,9 +237,9 @@ This enables:
 
 | Capability | How |
 |---|---|
-| `arc undo` | Walk the signal log backwards, find the last `add`/`remove`, reverse it |
+| `arc undo` | Walk the signal log backwards, find the last `gem:added`/`gem:removed`, reverse it |
 | `arc state --diff` | Compare Gemfile snapshots stored in consecutive signals |
-| `arc state` statistics | Aggregate `exec_end` signals by command, count success/failure |
+| `arc state` statistics | Aggregate `cmd:end` signals by command line, count success/failure |
 | Future: replay | Re-emit signals on a new machine to reproduce an environment |
 | Future: AI audit | Feed signal log to an LLM to explain what happened and why |
 
@@ -239,7 +250,7 @@ Flux Core is designed to be extracted as a standalone `flux-core` crate — usab
 ```rust
 // Any CLI tool can use Flux Core:
 let project = FluxProject::open(&cwd)?;
-project.record(SignalType::Custom, json!({ "action": "deploy", "env": "production" }))?;
+project.record(SignalType::CmdRun, json!({ "cmd": "deploy", "env": "production" }))?;
 ```
 
 ---
@@ -339,7 +350,7 @@ Three principles guide arc's design:
 - **CLI Framework**: clap v4
 - **Serialization**: serde + serde_json + toml
 - **IDs**: UUID v7 (time-sortable, monotonic)
-- **Log Format**: NDJSON (Newline Delimited JSON)
+- **Log Format**: [Flux Protocol v1](https://git.navii.online/takaki2/flux-protocol) NDJSON
 - **Ruby Source**: [ruby/ruby-builder](https://github.com/ruby/ruby-builder) pre-compiled binaries
 
 ---

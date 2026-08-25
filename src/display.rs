@@ -17,17 +17,17 @@ pub fn render_raw(signals: &[&signals::Signal], flux_dir: &Path) -> Result<()> {
         flux_dir
     );
 
-    let sep_top = "┌─────────────┬──────────────────────────────────────┬──────────────────────────────────────────────────┐";
-    let sep_mid = "├─────────────┼──────────────────────────────────────┼──────────────────────────────────────────────────┤";
-    let sep_bot = "└─────────────┴──────────────────────────────────────┴──────────────────────────────────────────────────┘";
+    let sep_top = "┌────────────────────┬──────────────────────────────────────┬──────────────────────────────────────────────────┐";
+    let sep_mid = "├────────────────────┼──────────────────────────────────────┼──────────────────────────────────────────────────┤";
+    let sep_bot = "└────────────────────┴──────────────────────────────────────┴──────────────────────────────────────────────────┘";
 
     println!("{sep_top}");
-    println!("│ {:<11} │ {:<36} │ {:<48} │", "Type", "ID", "Payload");
+    println!("│ {:<18} │ {:<36} │ {:<48} │", "Signal", "ID", "Payload");
     println!("{sep_mid}");
 
     for s in signals {
-        let payload = signals::truncate_display(&s.payload.to_string(), 48);
-        println!("│ {:<11} │ {:<36} │ {:<48} │", s.r_type, s.id, payload);
+        let payload = signals::truncate_display(&serde_json::Value::Object(s.payload.clone()).to_string(), 48);
+        println!("│ {:<18} │ {:<36} │ {:<48} │", s.name(), s.id(), payload);
     }
 
     println!("{sep_bot}");
@@ -58,7 +58,7 @@ pub fn render_full(signals: &[signals::Signal], cwd: &Path) -> Result<()> {
     if let Some(last) = state.last_execution() {
         let icon = if last.success { "✅" } else { "❌" };
         let dur = last.duration_ms.map(fmt_duration).unwrap_or_else(|| "⏳ running".to_string());
-        eprintln!("  Last:        {} {} ({})", icon, fmt_cmd(&last.command, &last.args), dur);
+        eprintln!("  Last:        {} {} ({})", icon, last.command, dur);
     }
 
     // ── 依存関係 (Gemfile) ──────────────────
@@ -108,7 +108,7 @@ pub fn render_full(signals: &[signals::Signal], cwd: &Path) -> Result<()> {
         for exec in &failed {
             let exit = exec.exit_code.map(|c| c.to_string()).unwrap_or_else(|| "?".to_string());
             let dur  = exec.duration_ms.map(fmt_duration).unwrap_or_else(|| "incomplete".to_string());
-            eprintln!("   ❌ {} (exit: {}, {})", fmt_cmd(&exec.command, &exec.args), exit, dur);
+            eprintln!("   ❌ {} (exit: {}, {})", exec.command, exit, dur);
         }
     }
 
@@ -124,7 +124,8 @@ pub fn render_diff(signals: &[signals::Signal]) -> Result<()> {
 
     // 最新の「意味のある」シグナルを探す（exec/install の開始終了ではなくメタデータ系のみ）
     let last = signals.iter()
-        .rfind(|s| matches!(s.r_type.as_str(), "add" | "remove" | "undo" | "bootstrap" | "init"));
+        .rfind(|s| matches!(s.name().as_str(),
+            "gem:added" | "gem:removed" | "operation:reverted" | "runtime:linked" | "project:created"));
 
     let last = match last {
         Some(s) => s,
@@ -137,39 +138,41 @@ pub fn render_diff(signals: &[signals::Signal]) -> Result<()> {
     eprintln!("🔍 Last Project Change:");
     eprintln!();
 
-    match last.r_type.as_str() {
-        "add" => {
-            let gem = last.payload["gem"].as_str().unwrap_or("?");
+    let field = |k: &str| last.payload.get(k).and_then(serde_json::Value::as_str);
+
+    match last.name().as_str() {
+        "gem:added" => {
+            let gem = field("gem").unwrap_or("?");
             eprintln!("  Gemfile:");
-            match last.payload["version"].as_str() {
+            match field("version") {
                 Some(v) => eprintln!("  \x1b[32m+ gem '{}', '{}'\x1b[0m", gem, v),
                 None    => eprintln!("  \x1b[32m+ gem '{}'\x1b[0m", gem),
             }
         }
-        "remove" => {
-            let gem = last.payload["gem"].as_str().unwrap_or("?");
+        "gem:removed" => {
+            let gem = field("gem").unwrap_or("?");
             eprintln!("  Gemfile:");
             eprintln!("  \x1b[31m- gem '{}'\x1b[0m", gem);
         }
-        "undo" => {
-            let target = last.payload["target_type"].as_str().unwrap_or("?");
-            let gem    = last.payload["gem"].as_str().unwrap_or("?");
+        "operation:reverted" => {
+            let target = field("target_type").unwrap_or("?");
+            let gem    = field("gem").unwrap_or("?");
             eprintln!("  ⏪ Undo of '{}' ({})", target, gem);
         }
-        "bootstrap" => {
-            let ruby = last.payload["ruby_version"].as_str().unwrap_or("?");
+        "runtime:linked" => {
+            let ruby = field("ruby_version").unwrap_or("?");
             eprintln!("  Runtime:");
             eprintln!("  \x1b[32m+ Ruby {}\x1b[0m", ruby);
         }
         _ => {
-            eprintln!("  Type: {}", last.r_type);
-            eprintln!("  Data: {}", last.payload);
+            eprintln!("  Signal: {}", last.name());
+            eprintln!("  Data:   {}", serde_json::Value::Object(last.payload.clone()));
         }
     }
 
     eprintln!();
-    eprintln!("  Timestamp: {}", fmt_timestamp(&last.timestamp));
-    eprintln!("  Signal ID: {}", last.id);
+    eprintln!("  Timestamp: {}", fmt_timestamp(&last.ts));
+    eprintln!("  Signal ID: {}", last.id());
 
     Ok(())
 }
