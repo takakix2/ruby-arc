@@ -349,6 +349,7 @@ Rapi（Ruby の小さな Web フレームワーク）のテストを `arc run` �
 
 - テスト 17 件（`run_is_allowed_only_after_a_sync_of_the_same_gemfile_and_lock`）・clippy 0・Windows 向けの check も通過
 - 🚚 blackcube / dyna の `arc` を `ad42b15` に（dyna は msvc・`mod.rs` / `runner.rs` の sha256 が一致）
+- 🚚 **同日: dyna の arc.exe を `~/dev/ruby-arc` の `main`（`dbe4c2b`）から焼き直した** —— それまでの dyna の arc.exe は、セッションの scratchpad に置いた古い枝（`child-tie`）の clone に直したファイルを写して焼いた物で、どの commit とも対応しなかった（中身は sha256 で一致させていたが、元はセッションと一緒に消える）。▶ dyna で焼くのは `~/dev/ruby-arc` から。scratchpad は「取り直して通るか」の使い捨て確認だけ（Rapi HANDOFF 17）
 
 ## Follow-Ups
 
