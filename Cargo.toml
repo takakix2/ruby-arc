@@ -12,7 +12,7 @@ serde_json = "1.0.149"
 toml = "1.0.2"
 uuid = { version = "1.21.0", features = ["serde", "v7"] }
 
-# 子プロセスの寿命を arc に結びつける（src/commands/child.rs・Follow-Ups 14）
+# 子プロセスの寿命を arc に結びつける（src/commands/child.rs）
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"
 libc = "0.2"

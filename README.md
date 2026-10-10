@@ -219,7 +219,7 @@ Key properties:
 - **Four required fields** — `v`, `source`, `type`, `event`. Everything else is payload, flat on the same line.
 - **`type` is a noun, `event` is what happened to it** — `gem:added`, `cmd:run`, `session:end`. Lowercase kebab-case; the pair is how the Signal Registry is keyed.
 - **UUID v7 `id`** — time-sortable, globally unique.
-- **Correlated by a shared `id`** — `cmd:run` and `cmd:end` carry the **same** `id`, so a pair is a group-by rather than a pointer chase. This is the same correlation model `hsh` uses.
+- **Correlated by a shared `id`** — `cmd:run` and `cmd:end` carry the **same** `id`, so a pair is a group-by rather than a pointer chase.
 - **`ts` is when it happened**, RFC 3339 with an explicit offset, on the producer's clock ([`PROTOCOL_v1.md` §2.05](https://git.navii.online/takaki2/flux-protocol)).
 - **Append-only** — signals are never modified or deleted.
 

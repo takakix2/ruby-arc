@@ -25,7 +25,7 @@ pub const FLUX_SOURCE: &str = "arc";
 /// グローバルなキャッシュディレクトリを取得する (~/.arc/cache)
 pub fn get_global_cache_dir() -> PathBuf {
     // std::env::home_dir() は deprecated のため、HOME 環境変数を直接参照する。
-    // Windows の素の席（cmd / hsh）には HOME が無いことがある —— `/tmp` に落ちると
+    // Windows（cmd 等）には HOME が無いことがある —— `/tmp` に落ちると
     // 今いるドライブの `\tmp` を指すので、USERPROFILE を先に見る。
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
@@ -48,9 +48,8 @@ pub fn get_global_gems_dir() -> PathBuf {
 ///
 /// 🚨 **自由形式の種別はここには無い**。以前は `Custom(String)` があり、そこから
 /// `shell_enter` / `add_start` のようなアンダースコア入りの名前が生まれていたが、
-/// v1 の §3/§4 は `type`/`event` を `^[a-z0-9-]+$` に限っている。hsh が
-/// `job:job_started` で同じ罠を踏み、「内部語彙を journal の境界で翻訳する」ことで
-/// 直したのと同じ判断で、この enum が唯一の入口になっている。
+/// v1 の §3/§4 は `type`/`event` を `^[a-z0-9-]+$` に限っている。
+/// ∴ 内部の語彙は記録の境界で翻訳し、この enum を唯一の入口にしている。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignalType {
     /// `project:created` — `arc init`
@@ -148,7 +147,7 @@ impl Signal {
     }
 
     /// このレコードの識別子 (UUID v7)。`cmd:run` と `cmd:end` は**同じ値**を持ち、
-    /// それが両者を綴じる鍵になる (hsh の journal と同じ相関モデル)。
+    /// それが両者を綴じる鍵になる。
     pub fn id(&self) -> &str {
         self.payload.get("id").and_then(Value::as_str).unwrap_or("")
     }
@@ -180,7 +179,7 @@ impl Signal {
         Ok(Self::from_legacy(obj))
     }
 
-    /// `{id, type, payload, timestamp}` 形式 (2026-02〜2026-08) を読む。
+    /// v1 envelope より前の `{id, type, payload, timestamp}` 形式を読む。
     fn from_legacy(obj: Map<String, Value>) -> Self {
         let legacy_type = obj.get("type").and_then(Value::as_str).unwrap_or("");
         let (subject, event) = legacy_name(legacy_type);
@@ -320,7 +319,7 @@ impl FluxProject {
             source: FLUX_SOURCE.to_string(),
             subject: signal_type.subject().to_string(),
             event: signal_type.event().to_string(),
-            // hsh と同じ綴り・同じ時計: UTC・マイクロ秒・明示的オフセット。
+            // Flux Protocol の時刻の綴り: UTC・マイクロ秒・明示的オフセット。
             ts: Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false),
             payload,
         };

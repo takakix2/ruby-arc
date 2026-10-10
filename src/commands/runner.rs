@@ -187,7 +187,7 @@ pub fn run_with_flux(
     env_mode: ArcEnv,
 ) -> Result<()> {
     // `cmd:run` / `cmd:end` は同じ `id` を名乗ることで綴じられる。
-    // 終端が始端を指すのではなく、両者が同じ鍵を持つ —— hsh の journal と同じ相関モデル。
+    // 終端が始端を指すのではなく、両者が同じ鍵を持つ。
     let id = Uuid::now_v7().to_string();
 
     // 家族の綴りに合わせた 1 本のコマンドライン。argv の忠実な形は `args` に残す
@@ -221,14 +221,14 @@ pub fn run_with_flux(
     // 隔離モードの場合、環境変数を注入する
     if env_mode == ArcEnv::Isolated {
         inject_isolated_env(&mut command, cwd)?;
-        // `arc run` は lock の通りに動かす（`bundle exec` と同じ形・Follow-Ups 16）
+        // `arc run` は lock の通りに動かす（`bundle exec` と同じ形）
         if verb == "run" {
             inject_bundler_setup(&mut command, cwd, cmd);
         }
     }
 
     let timer = Instant::now();
-    // arc が止められても子を残さない（child.rs・Follow-Ups 14）
+    // arc が止められても子を残さない（child.rs）
     let status = super::child::run_tied(&mut command)
         .map_err(|e| anyhow::anyhow!("コマンド '{}' の起動に失敗しました: {}", cmd, e))?;
 
@@ -295,9 +295,8 @@ pub fn goes_through_bundler(cwd: &Path, cmd: &str) -> bool {
 /// `arc run` の子を bundler の下で起こす: `BUNDLE_GEMFILE` と `RUBYOPT` の先頭に `-rbundler/setup`
 /// （`bundle exec` が子に渡すのと同じ 2 つ）。Gemfile の無いプロジェクトでは何もしない。
 ///
-/// 📏 2026-10-11 dyna: GEM_HOME だけ向けて起こしていたので、RubyGems が**手元で一番新しい版**を選んでいた ——
-/// Rapi で `arc sync` が prism 1.9.0（lock の版）のビルドで落ちたのに、`arc run ruby test/all.rb` は
-/// Ruby に同梱の prism 1.8.1 を読んで 64 本通った ＝ 緑が「lock の通りに動いた」の証拠にならなかった。
+/// GEM_HOME を向けるだけだと、RubyGems は**手元で一番新しい版**を選ぶ ＝ lock の版が入っていなくても
+/// Ruby に同梱の別の版で動いてしまい、通っても「lock の通りに動いた」の証拠にならない。
 /// bundler の下なら、lock の版が入っていなければ `Bundler::GemNotFound` で止まる。
 ///
 /// `bundle` / `gem` そのものには掛けない —— `bundle install` は入れる前に bundler/setup が
@@ -319,11 +318,11 @@ pub fn inject_bundler_setup(command: &mut Command, cwd: &Path, cmd: &str) {
 /// プロジェクト（`.arc/env/ruby_runtime`）とキャッシュの Ruby（`arc x`）の両方がここを通る。
 ///
 /// - PATH の先頭は `<root>/bin`、続いて `extra_bins`、その後ろに今の PATH。
-///   ⚠️ 置くのは bin の**ディレクトリ**（`b9b6997` から `bin/ruby` というファイルを置いていて、
-///   子の中から `bundle` / `rake` が 1 つも引けなかった）
-/// - LD_LIBRARY_PATH: 📏 ruby-builder の Ruby は無いと `libruby.so.4.0` を見つけられずに起動しない
+///   ⚠️ 置くのは bin の**ディレクトリ**（`bin/ruby` というファイルを置くと、子の中から
+///   `bundle` / `rake` が 1 つも引けない）
+/// - LD_LIBRARY_PATH: ruby-builder の Ruby は無いと `libruby.so` を見つけられずに起動しない
 ///   （Windows は DLL を exe の隣から読むので足さない）
-/// - RUBYLIB: Windows の RubyInstaller は自分の置き場所から標準ライブラリを読める（📏 dyna）ので足さない
+/// - RUBYLIB: Windows の RubyInstaller は自分の置き場所から標準ライブラリを読めるので足さない
 ///   —— 足すと arch のディレクトリ名（x64-mingw-ucrt）を外した順の $LOAD_PATH を押し付けることになる
 pub fn apply_ruby_root_env(command: &mut Command, ruby_root: &Path, extra_bins: &[PathBuf]) -> Result<()> {
     let mut paths = vec![ruby_root.join("bin")];
@@ -388,7 +387,7 @@ mod tests {
             .and_then(|(_, v)| v.map(|v| v.to_os_string()))
             .unwrap();
         let first = env::split_paths(&path).next().unwrap();
-        // b9b6997 から `bin/ruby`（ファイル）が先頭に入っていた
+        // 先頭はファイル（`bin/ruby`）ではなくディレクトリ
         assert_eq!(first, ruby_runtime_bin(&root.join(ARC_ENV_DIR)));
         assert!(first.is_dir());
         std::fs::remove_dir_all(root).unwrap();

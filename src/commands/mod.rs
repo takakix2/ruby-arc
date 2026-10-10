@@ -351,7 +351,7 @@ pub fn run(args: &[String]) -> Result<()> {
         .context("Flux プロジェクトが見つかりません。`arc init` を実行してください。")?;
 
     let (cmd, cmd_args) = (&args[0], &args[1..]);
-    // 起こす前に lock と突き合わせる（Follow-Ups 16 の続き）—— bundler/setup でも止まるが、
+    // 起こす前に lock と突き合わせる —— bundler/setup でも止まるが、
     // それは bundler の例外とバックトレースで「`arc sync` を」とは言わない。
     // 自動では sync しない（uv run はする）: C 拡張のコンパイルやネットワークを、run の陰で起こさない
     if runner::goes_through_bundler(&cwd, cmd) && !synced_matches(&cwd) {
@@ -599,11 +599,11 @@ fn resolve_ruby_id(version: &str) -> String {
 /// Ruby の取り寄せ先の候補（先頭から試し、最初に取れた物を使う）。
 ///
 /// - Linux: ruby-builder（GitHub Actions のツールキャッシュ）の `.tar.gz` が 1 つ
-/// - Windows: RubyInstaller の持ち運べる版（`.7z`）。📏 2026-10-11 dyna: インストールせずに
-///   その場から動く（`3.3.6 [x64-mingw-ucrt]`・標準ライブラリも自分の場所から読む）。
+/// - Windows: RubyInstaller の持ち運べる版（`.7z`）。インストールせずに
+///   その場から動く（標準ライブラリも自分の場所から読む）。
 ///   ⚠️ 名前に**パッケージの版** `-N` が付き、版ごとに違う（3.3.6 は `-1` と `-2`）＝ 大きい方から試す
 fn resolve_ruby_urls(version: &str) -> Result<Vec<String>> {
-    // ruby-builder は途中で配り方を変えた（📏 2026-10-11）:
+    // ruby-builder は配り方が 2 通りある:
     //   新: 版ごとのリリース `ruby-<v>/ruby-<v>-<os>-<arch>.tar.gz`（4.0.x・3.4.7+ 等。x64 に `-x64` が付く）
     //   旧: 1 つのリリース `toolcache/ruby-<v>-<os>[-arm64].tar.gz`（3.4.6 まで・3.3.6 等）
     // 新しい形を先に試し、無ければ旧い形。
@@ -624,7 +624,7 @@ fn resolve_ruby_urls(version: &str) -> Result<Vec<String>> {
     Ok(match (env::consts::OS, env::consts::ARCH) {
         ("linux", "x86_64")  => builder("ubuntu-24.04-x64", Some("ubuntu-24.04")),
         ("linux", "aarch64") => builder("ubuntu-24.04-arm64", Some("ubuntu-24.04-arm64")),
-        // macOS は新しい形だけ確かめた（4.0.7 に darwin-arm64 / darwin-x64 が在る）。m4air では未撃ち
+        // macOS は新しい形だけ（旧い形には darwin の物が無い）。⚠️ macOS 上ではまだ動かしていない
         ("macos", "aarch64") => builder("darwin-arm64", None),
         ("macos", "x86_64")  => builder("darwin-x64", None),
         ("windows", "x86_64") => (1..=5)
@@ -731,8 +731,7 @@ fn ruby_cache_dir(version: &str) -> PathBuf {
 /// その版の Ruby をグローバルキャッシュに用意する（`bootstrap` と `arc x` が共有）。返り値は当たったか。
 ///
 /// 「ディレクトリが在る」ではなく「ruby の実体が在る」で判定する —— 取り寄せが途中で止まると
-/// 空（や半端）のディレクトリが残り、それを当たりとして中身の無い Ruby を置いていた
-/// （📏 2026-10-11 dyna: 未対応で止まった回の空ディレクトリを「Cache Hit」と読んだ）
+/// 空（や半端）のディレクトリが残り、それを当たりとして読むと中身の無い Ruby を置くことになる
 fn ensure_ruby_in_cache(version: &str) -> Result<bool> {
     let cache_dir = ruby_cache_dir(version);
     if runner::ruby_bin_in(&cache_dir).is_file() {
@@ -765,11 +764,11 @@ fn gem_set_key(gems: &[String]) -> String {
 
 /// `--with` の gem を有効にし、その場所を `$LOAD_PATH` の**先頭**に置く Ruby の行（bundler と同じ扱い）
 ///
-/// 📏 2026-10-11: `gem "json", "2.7.2"` で有効にしても、Linux では `require "json"` が
-/// Ruby に同梱の 2.18.0 を読んだ —— arc は標準ライブラリを `RUBYLIB` で足しており
+/// `gem "json", "2.7.2"` で有効にするだけでは、Linux の `require "json"` が Ruby に同梱の版を読む ——
+/// arc は標準ライブラリを `RUBYLIB` で足しており
 /// （ruby-builder の Ruby は CI のパスでビルドされていて、無いと標準ライブラリを見つけられない）、
 /// RubyGems は gem の場所を `RUBYLIB` / `-I` の**後ろ**に差し込むため。Windows は `RUBYLIB` を
-/// 足さないので出ないが、同じ行で害は無い。`arc run`（bundler 経由）は bundler が先頭に置くので出ない。
+/// 足さないので起きないが、同じ行で害は無い。`arc run`（bundler 経由）は bundler が先頭に置くので起きない。
 fn gem_activations(gems: &[String]) -> String {
     gems.iter()
         .map(|g| g.trim())
@@ -834,8 +833,8 @@ pub fn x(ruby: Option<&str>, with: &[String], devkit: bool, args: &[String]) -> 
 
     let mut cmd = std::process::Command::new(&ruby);
     // `--with` の gem は、台本より先に有効にして `$LOAD_PATH` の先頭へ（`gem_activations` の doc）——
-    // 📏 RubyGems は require のとき手元で一番新しい版を選ぶので、何もしないと Ruby に同梱の gem
-    // （4.0.7 の json 2.18.0 等）が `--with json:2.7.2` で入れた版に勝つ
+    // RubyGems は require のとき手元で一番新しい版を選ぶので、何もしないと Ruby に同梱の gem
+    // （json 等）が `--with json:2.7.2` で入れた版に勝つ
     if let Some(g) = &gem_home {
         let activate = g.join("arc-x-activate.rb");
         fs::write(&activate, gem_activations(with))?;
@@ -877,12 +876,11 @@ fn devkit_cache_dir(version: &str) -> PathBuf {
 /// RubyInstaller は MSYS2 を**自分の置き場所の中の `msys64` から最初に探す**
 /// （`ruby_installer/runtime/msys2_installation.rb`）＝ そこに置けば `.arc/` の中で完結し、
 /// インストーラー（with Devkit 版の `.exe`・アンインストール情報を登録する）を使わずに済む。
-/// 📏 2026-10-11 dyna: 素の版を展開 → `ridk install 3`（80 秒）で `bigdecimal` がコンパイルできた。
+/// MSYS2 の素の版を展開し、`ridk install 3` で MINGW の toolchain を入れる。
 /// 約 1GB あるので既定では入れない（コンパイル済みの物が配られていない gem が要るときだけ）。
 ///
 /// ⚠️ **キャッシュの Ruby（`rubies/<id>`）には入れない** —— bootstrap はそれを丸ごとリンクするので、
-/// 一度誰かが `--devkit` を撃つと、以後その版の全プロジェクトに `msys64` が付いていた
-/// （📏 2026-10-11 dyna: Pharos の `--devkit` の後、Rapi を取り直したら付いてきた）＝
+/// そこに置くと一度 `--devkit` を使っただけで、以後その版の全プロジェクトに `msys64` が付く ＝
 /// 「DevKit 無しでも通るか」を確かめられない。∴ 別の木（`devkits/<id>`）に作り、
 /// `ridk install 3` もその木の Ruby で撃つ（RubyInstaller はその木の `msys64` を見る）。
 fn ensure_devkit_in_cache(version: &str) -> Result<PathBuf> {

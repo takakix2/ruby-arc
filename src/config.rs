@@ -11,9 +11,8 @@ use std::path::Path;
 
 const CONFIG_FILE: &str = "config.toml";
 /// `arc init` と `arc x` の既定の Ruby。
-/// 🚚 2026-10-11 に 3.3.6 → 4.0.7（その日の最新・Linux の ruby-builder と Windows の RubyInstaller の両方に在る）。
-/// 3.3.6 は 2026-02 の v1 で決め打ちから引き継いだ値で、選んだ理由は記録に無い。
-/// ⚠️ Windows で C 拡張を使うなら 4 系 —— MSYS2 の GCC 16 と 3.3.6 のヘッダは合わない（bigdecimal で実測）。
+/// Linux の ruby-builder と Windows の RubyInstaller の両方に在る版を選ぶ。
+/// ⚠️ Windows で C 拡張を使うなら 4 系 —— MSYS2 の GCC 16 と 3.3 系のヘッダは合わない。
 /// init のたびに最新を調べには行かない（オフラインで止まる・GitHub API の回数制限）＝ ここを上げる。
 pub const DEFAULT_RUBY_VERSION: &str = "4.0.7";
 
