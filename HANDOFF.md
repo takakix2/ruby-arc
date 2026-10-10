@@ -324,6 +324,31 @@ Rapi（Ruby の小さな Web フレームワーク）のテストを `arc run` �
 - テスト 16 件（`arc_run_goes_through_bundler_only_when_there_is_a_gemfile` を足した）・clippy 0・Windows 向けの check も通過
 - 🚚 blackcube / dyna の `arc` を `c518607` に（dyna は msvc で焼いた物・`runner.rs` の sha256 が一致）
 - ⏭ 止まり方は bundler のまま —— 📏 `Bundler::GemNotFound` の 1 行とバックトレース（計 11 行）で、**「`arc sync` を」とは言わない**。言わせるなら arc が子の stderr を読むか、起こす前に lock と入っている物を突き合わせることになる（uv は後者・起こす前に sync する）。今はしていない
+  - 🚚 同日の続き（`ad42b15`）で後者をした ↓
+
+### 同日の続き —— `arc run` は起こす前に lock と突き合わせる（`ad42b15`）
+
+- `arc sync` が**通ったとき**、`Gemfile` と `Gemfile.lock` の写しを **`.arc/env/.synced/`** に置く（`bundle install` の**前に消す** ＝ 落ちた sync の後には写しが無い）。`arc add` / `remove` / `undo` も sync を通るので同じ
+- `arc run` は bundler の下で起こすとき（`runner::goes_through_bundler` ＝ Gemfile が在り `bundle` / `gem` そのものではない）、今の 2 つと写しを**バイトで**比べる。違う・写しが無い → `🛑 … 最後に通った arc sync と違います（または sync が通っていません）` ＋ 「`arc sync` を」で **rc=1**。Ruby を起こさないので速い
+- **自分では sync しない**（uv run はする）—— C 拡張のコンパイル（DevKit・数十秒）やネットワークを `run` の陰で起こさない。⏸ uv に寄せて自動にするかは 🧑 と決めていない
+- ⚠️ **この版より前の arc で sync したプロジェクトは写しが無い** ＝ 1 回 `arc sync` が要る（blackcube の Rapi / Pharos は撃ち直し済み）
+- 📌 写しが一致しても「入っている」の証明ではない（`.arc/env` を手で消した等）—— そこは bundler/setup（`c518607`）が止める。2 段構え
+
+📏 撃った:
+
+| | 結果 |
+|---|---|
+| blackcube Rapi・写しが無い（古い arc で sync）| 止まる rc=1 |
+| 〃 sync の後 | 66 本通過 |
+| 〃 lock の末尾に改行を足す | 止まる rc=1 |
+| 〃 `arc run bundle exec ruby …` | 止めない（`bundle` そのもの）|
+| 〃 lock を戻す | 走る |
+| dyna Rapi を取り直し `--devkit` 無し → sync rc=5 → run | **バックトレースではなく 2 行で止まる** rc=1 |
+| 〃 `--devkit` → sync → run | 66 本通過 |
+| blackcube Pharos（sync し直して）| 15 本通過 |
+
+- テスト 17 件（`run_is_allowed_only_after_a_sync_of_the_same_gemfile_and_lock`）・clippy 0・Windows 向けの check も通過
+- 🚚 blackcube / dyna の `arc` を `ad42b15` に（dyna は msvc・`mod.rs` / `runner.rs` の sha256 が一致）
 
 ## Follow-Ups
 
