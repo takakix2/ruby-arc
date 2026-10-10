@@ -233,6 +233,24 @@ Rapi（Ruby の小さな Web フレームワーク）のテストを `arc run` �
 - 📌 計器: 最初に bigdecimal を手で撃ったとき「`ruby/ruby.h` が無い」と出たのは、**撃つ側が付けた `MSYS_NO_PATHCONV=1` が `make` に継がれ、MSYS の `/C/…` → `C:/…` 変換を止めた**ため。▶ DevKit を撃つときは git-bash を挟まない（PowerShell から）
 - 📌 dyna の `~/.arc/cache` に Ruby 4.0.7 ＋ `msys64` で約 1.1GB（プロジェクト側はハードリンク）
 
+### 同日の続き —— `arc x` と既定の Ruby 4.0.7（`6d667f5`）
+
+🧑「Windows で Ruby の管理が uv みたいに使えたら楽」→ uv と比べて足りない物のうち **1（init の既定の版）と 2（プロジェクト無しで 1 回撃つ口）** をやった。
+
+**1. 既定の Ruby を 4.0.7 に**（`config::DEFAULT_RUBY_VERSION`・`pub` にして `arc x` と共有）
+- 3.3.6 は 2026-02-18 の v1（`6ef83da`「決め打ちの `RUBY_VERSION` 定数を外す」）で決め打ちから引き継いだ値で、**選んだ理由は記録に無い**（🧑「なんで 3.3.6 選んだか忘れた」）
+- init のたびに最新を調べには行かない（オフラインで止まる・GitHub API の回数制限）＝ 上げるときはこの値を上げる
+
+**2. `arc x [--ruby V] [--with GEM]... [--devkit] -- <ruby の引数>`**（uvx / npx に当たる）
+- キャッシュの Ruby を直接起こす。**プロジェクトも `.arc/` も記録（Flux）も作らない**
+- `--with` の gem（`name` / `name:version`）は「Ruby の版 × gem の組」ごとのキャッシュ（`~/.arc/cache/x/<ruby>/<組>`・印は `.arc-x-ready`）に入れて使い回す。📏 rack: 1 回目 1.6 秒 → 2 回目 0.2 秒
+- gem install の出力は **stderr へ**（stdout は台本の物 ＝ `arc x … | jq` が 1 回目だけ汚れていた）。終了コードはそのまま返す
+- 🚨 **`--with` の gem は有効にしてから `$LOAD_PATH` の先頭へ**（`gem_activations()`・bundler と同じ扱い）—— 📏 `--with json:2.7.2` で、① Ruby に同梱の json 2.18.0 が勝った（RubyGems は手元で一番新しい版を選ぶ）② Linux では `gem "json", "2.7.2"` で有効にしても `require` が `RUBYLIB` の標準ライブラリの json.rb を先に読んだ（RubyGems は gem の場所を `RUBYLIB` / `-I` の**後ろ**に差し込む）。📏 プロジェクト（`arc run bundle exec` / `-rbundler/setup`）は bundler が先頭に置くので 2.7.2 が効いていた ＝ 影響は `arc x` だけだった
+- 環境変数の組み立てを `apply_ruby_root_env()`（Ruby の木を受け取る）に 1 本化し、プロジェクトの `inject_isolated_env` もそこを通す。📏 キャッシュの Linux の Ruby は **`LD_LIBRARY_PATH` が無いと起動しない**（`libruby.so.4.0`）、**`RUBYLIB` が無いと標準ライブラリを見つけられない**（ruby-builder は CI のパスでビルド ＝ 置き場所からは読めない）—— ⚠️ ∴ Linux の `RUBYLIB` は外せない
+- 📏 dyna / blackcube の両方: 4.0.7・`--ruby 3.3.6`・`--with rack` / `rack:3.1.16` / `json:2.7.2`（→ 2.7.2）・`exit 7`（→ 7）・台本の引数（`"b c"` が 1 つ）・カレントに何も作らない。Rapi 117・Pharos 15/15（`arc run`）・テスト 15 件・clippy 0
+- 🚚 blackcube / dyna の `arc` を `6d667f5` に。✅ Gitea / GitHub とも `6d667f5`。README（EN / JA）のコマンド表に `arc x`、例の版を 4.0.7 に
+- 📌 計器: Python をヒアドキュメントで渡して Rust を書き換えたら **`\n` が本物の改行に化けた**（2 か所・テストが赤で気づいた）。▶ Rust の文字列を含む書き換えは Edit ツールで
+
 ## Follow-Ups
 
 1. ✅ **flux-protocol に issue を立てた** —
@@ -278,6 +296,10 @@ Rapi（Ruby の小さな Web フレームワーク）のテストを `arc run` �
 10. 🔶 **macOS の bootstrap** —— `9f3116c` で `darwin-arm64` / `darwin-x64` を足した。**m4air で撃っていない**（`fix_ruby_shebangs` が要るか・`DYLD_*` が要るかも未確認）。
 11. **グローバルの gem キャッシュが C 拡張の無い gem を戻す？** —— `Ignoring json-3.0.2 because its extensions are not built`（2026-10-11・未調査）。
 12. ✅ **Rapi / Pharos を Ruby 4.0.7 の arc 管理に揃えた**（2026-10-11・🧑）—— Rapi `747f8f7`・Pharos `d030a7d`（`arc init`・`.flux/config.toml` を git に・lock に `x64-mingw-ucrt`）。blackcube と dyna（Gitea から取り直し）の両方で全部通過、dyna で `sync` の後も lock は書き換わらない。Rapi は `--devkit` 不要、Pharos は要る（Falcon / Puma / bigdecimal）
+13. **uv と比べて残っている物**（2026-10-11 に 🧑 と並べた・1 と 2 は済み）:
+    ③ Ruby の版の一覧と取り寄せ（`uv python list` / `install` に当たる・今は bootstrap / `arc x` の中でだけ取る）
+    ④ arc 自体の配り方（焼いた `arc.exe` を Gitea のリリースへ 等）
+    ⑤ gem の解決が bundler 任せ（uv の速さには届かない・大きい話）
 
 ## 関連
 
