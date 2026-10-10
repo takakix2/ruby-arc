@@ -19,3 +19,7 @@ implementation_plan.md
 # Sensitive / Environment
 .env
 .env.*
+
+# Private development notes: branch "handoff" (Gitea only), checked out here with
+#   git worktree add .handoff handoff
+.handoff/
