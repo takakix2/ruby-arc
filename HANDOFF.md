@@ -277,7 +277,7 @@ Rapi（Ruby の小さな Web フレームワーク）のテストを `arc run` �
    ⏸ 残り: dyna の `~/.local/bin` に `arc.exe` を置くか（🧑 の判断待ち）。
 10. 🔶 **macOS の bootstrap** —— `9f3116c` で `darwin-arm64` / `darwin-x64` を足した。**m4air で撃っていない**（`fix_ruby_shebangs` が要るか・`DYLD_*` が要るかも未確認）。
 11. **グローバルの gem キャッシュが C 拡張の無い gem を戻す？** —— `Ignoring json-3.0.2 because its extensions are not built`（2026-10-11・未調査）。
-12. ⏸ **Rapi / Pharos を Ruby 4.0.7 の arc 管理に揃えるか**（Rapi は `.flux/config.toml` が 3.3.6、Pharos は arc 管理外）—— 🧑 の判断待ち。
+12. ✅ **Rapi / Pharos を Ruby 4.0.7 の arc 管理に揃えた**（2026-10-11・🧑）—— Rapi `747f8f7`・Pharos `d030a7d`（`arc init`・`.flux/config.toml` を git に・lock に `x64-mingw-ucrt`）。blackcube と dyna（Gitea から取り直し）の両方で全部通過、dyna で `sync` の後も lock は書き換わらない。Rapi は `--devkit` 不要、Pharos は要る（Falcon / Puma / bigdecimal）
 
 ## 関連
 
