@@ -251,6 +251,31 @@ Rapi（Ruby の小さな Web フレームワーク）のテストを `arc run` �
 - 🚚 blackcube / dyna の `arc` を `6d667f5` に。✅ Gitea / GitHub とも `6d667f5`。README（EN / JA）のコマンド表に `arc x`、例の版を 4.0.7 に
 - 📌 計器: Python をヒアドキュメントで渡して Rust を書き換えたら **`\n` が本物の改行に化けた**（2 か所・テストが赤で気づいた）。▶ Rust の文字列を含む書き換えは Edit ツールで
 
+### 同日の続き —— arc を止めたら子も止まる（`ecc3c7b`・Follow-Ups 14）
+
+📏 踏んだ形: Rapi #7 を `arc x --with puma … -- -S puma …` で撃ち、`arc` の PID に `kill` → **Puma（PPID 1）が残ってポートを握り続けた**。arc は子を `status()` で待つだけで、受けたシグナルを子に渡していなかった。直しは `src/commands/child.rs` に集めた:
+
+| | 直し |
+|---|---|
+| `arc x`（Linux / macOS）| 記録を残さないので **`exec` で ruby に置き換わる**（uvx と同じ）＝ 止めた PID が ruby |
+| `arc run` / `arc shell`（Linux / macOS）| 終わりを記録するので置き換えられない ＝ **SIGTERM / SIGHUP / SIGQUIT を子へ渡して待つ**（`signal-hook`）。⚠️ **SIGINT は渡さず受け流す** —— 端末の Ctrl+C はプロセスグループ全員に届くので、渡し直すと子が 2 回受け取る（bash が子を待つときと同じ作法）|
+| Windows（3 つとも）| 子を **job object（`KILL_ON_JOB_CLOSE`）** に入れる ＝ arc が消えれば子も消える（`windows-sys` 0.59）。arc 自身の Ctrl+C は**子を起こした後で**、継がれない handler 関数で受け流す —— 起こす前の `SetConsoleCtrlHandler(NULL, TRUE)` は子に継がれて、子が Ctrl+C を無視する |
+| 記録の終了コード | シグナルで死んだ子は **128 + シグナル番号**（それまで一律 1）|
+
+📏 直す前の arc と並べて撃った:
+
+| | 直す前 | 直した後 |
+|---|---|---|
+| dyna: `arc x` / `arc run` の arc を強制終了 | 子の ruby が残った | 子も消えた |
+| blackcube: `arc x` を TERM | `comm=arc` で ruby が残った | `comm=ruby`（exec）で消えた |
+| blackcube: `arc run` を TERM | 子が残り `cmd:end` も無し | 子も止まり `exit_code: 143` |
+| blackcube: グループに SIGINT | — | 子は 1 回だけ受け取った（`exit 10 + 回数` → 11）|
+
+- テスト 15 件・clippy 0（両方）。Rapi 134（`arc run`）。終了コードの受け渡し（`exit 7`）も変わらず
+- 🚚 blackcube / dyna の `arc` を `ecc3c7b` に。✅ Gitea / GitHub とも `ecc3c7b`
+- ⚠️ 撃っていない: **Windows のコンソールで実際に Ctrl+C を押したとき**（確かめたのは「arc を強制終了すると子が道連れになる」まで）
+- 📌 計器: 被検体は `setsid` で別のプロセスグループに入れ、PID は起こしたときに控えた物だけを使った（名前で `pkill` しない）。⚠️ この席の `&` は SIGINT の無視を子に継がせる ＝ **SIGINT の行は直す前の版との比較に使えない**（直す前の arc も SIGINT で死ななかった）。直す前の版で残った ruby（dyna 2・blackcube 2）は args を確かめてから止めた
+
 ## Follow-Ups
 
 1. ✅ **flux-protocol に issue を立てた** —
@@ -300,10 +325,8 @@ Rapi（Ruby の小さな Web フレームワーク）のテストを `arc run` �
     ③ Ruby の版の一覧と取り寄せ（`uv python list` / `install` に当たる・今は bootstrap / `arc x` の中でだけ取る）
     ④ arc 自体の配り方（焼いた `arc.exe` を Gitea のリリースへ 等）
     ⑤ gem の解決が bundler 任せ（uv の速さには届かない・大きい話）
-14. 🐛 **`arc x` / `arc run` を止めても子が残る**（2026-10-11・Rapi #7 を撃っていて踏んだ）—— 📏 `arc x --with puma … -- -S puma …` を
-    裏で起こし、`arc` の PID に `kill` → **Puma（ruby・PPID 1）が残ってポートを握り続けた**。arc は子を `status()` で待つだけで、
-    受けたシグナルを子に渡さない。▶ 案: Linux / macOS の `arc x` は記録を残さないので **`exec` で ruby に置き換わる**（uvx と同じ）。
-    `arc run` は `cmd:end` を書くので置き換えられない ＝ SIGINT / SIGTERM を子へ渡してから待つ。Windows は job object で子を道連れにする
+14. ✅ **`arc x` / `arc run` を止めても子が残る** —— `ecc3c7b` で直した（2026-10-11 の節「arc を止めたら子も止まる」）。
+    ⏸ 残り: Windows のコンソールで実際に Ctrl+C を押したときは未確認
 
 ## 関連
 
