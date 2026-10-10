@@ -184,6 +184,31 @@ Rapi（Ruby の小さな Web フレームワーク）のテストを `arc run` �
 - `arc shell` は `$SHELL`（dyna では Git の bash を起こした）—— hsh を起こしたいなら `SHELL` を hsh に
 - ⚠️ **macOS も同じ所で止まる**（`resolve_ruby_url` に darwin が無い）—— m4air で Ruby の経路が試せない理由の半分はこれ
 
+### 同日の続き —— Windows 移植（`fd3533f`）✅ Rapi のテストが dyna で通った
+
+📏 **dyna: `arc bootstrap` → `arc sync` → `arc run ruby test_router.rb`（Rapi）で 117 件・rc=0**（Ruby 3.3.6 x64-mingw-ucrt）。dyna にシステムの Ruby は入れていない（`.arc/` の中だけ）。
+
+| 変えた所 | 中身 |
+|---|---|
+| Ruby の出所 | `resolve_ruby_urls()`: Windows は **RubyInstaller の持ち運べる `.7z`**。名前の**パッケージの版 `-N` が版ごとに違う**（3.3.6 は `-1` と `-2`）ので `-5`→`-1` の順に試し、最初に取れた物（3.3.6 は `-2`・15MB）|
+| 取り寄せ・展開 | `fetch_tool()`: Windows は **System32 の `curl.exe` / `tar.exe` を絶対パスで** —— bsdtar は `.7z` を読める（📏 確認）が、PATH に Git for Windows が居ると GNU tar（読めない）が先に当たりうる。展開は `-xf`（Linux も gzip を中身から見分ける）。⚠️ curl は `-s`（進捗バーを出さなくなった・候補の 404 を黙らせるため）|
+| 置き方 | `link_or_copy_tree()`: Windows は `cp -al` の代わりに Rust の中で 1 ファイルずつハードリンク（失敗したらコピー）。Linux は今までどおり `cp -al` |
+| 名前 | `ruby_bin_in()` が `ruby.exe`。裸の名前は `.exe` → `.bat` → `.cmd` → 素の順（`bundle.bat`。拡張子なしの `bundle` は Ruby のスクリプトで直接は起こせない）|
+| 環境変数 | Windows では `LD_LIBRARY_PATH` と `RUBYLIB` を足さない —— 📏 RubyInstaller は自分の置き場所から標準ライブラリを読む。`bundle.bat` は `%~dp0ruby.exe` を起こすので、Linux の「CI の 1 行目」問題は起きない |
+| `arc shell` | `$SHELL` が無ければ `%COMSPEC%` |
+
+**Windows 以外にも効くバグを 2 つ直した**:
+- 🚨 **キャッシュの当たりが「ディレクトリが在る」だった** —— 取り寄せが途中で止まる（や、`resolve` で bail する前に `create_dir_all` していた旧版）と**空のディレクトリが残り、次の bootstrap がそれを「Cache Hit」として中身の無い Ruby を置いた**（📏 dyna で実際に起きた: 未対応で止まった回の空ディレクトリ）。→ 当たりは「`bin/ruby` の実体が在る」。半端なキャッシュ・ruby の無いプロジェクトの `ruby_runtime` は消して置き直す
+- **`HOME` が無いとキャッシュが `/tmp`** —— Windows の素の席（cmd / hsh）は `HOME` を持たないことがあり、`/tmp` は今のドライブの `\tmp`。→ `USERPROFILE` を先に見る
+
+- 📏 テスト 13 件（`a_tree_is_linked_like_cp_al` を足した）・clippy 0 —— dyna（msvc）と blackcube の両方。blackcube は新しいプロジェクトと Rapi を arc で撃ち直して変わらず
+- 🚚 blackcube の `~/.local/bin/arc` を `fd3533f` に。⏸ **dyna の `~/.local/bin` には入れていない**（scratchpad で焼いた物で撃った・入れるかは 🧑 の判断待ち）
+- ✅ Gitea / GitHub とも `fd3533f`。README の Windows の行を「Planned」→「🔶 一部」に
+
+⏸ **残る壁: C 拡張をその場でコンパイルする gem**。📏 Rapi の `Gemfile.lock` で `bigdecimal 4.1.3`（sequel の依存）が `MSYS2 could not be found. Please run 'ridk install'` で入らず、**`arc sync` は rc=1**（rack と sqlite3 はビルド済みの物が配られているので入る）。RubyInstaller の持ち運べる版には DevKit（MSYS2）が無い。∴ **sequel を使う Pharos は Windows ではここで止まるはず**（撃っていない）。案: ① arc が MSYS2 も取ってくる（数百 MB〜GB）② ビルド済みの物が在る版に lock を合わせる
+
+📌 **別件（Linux で見た）**: blackcube の新しいプロジェクトで `Ignoring json-3.0.2 because its extensions are not built` が出た —— 同日に `arc add json` / `arc undo` を試したプロジェクトから、グローバルの gem キャッシュ（`harvest_gems` / `restore_gems`）に C 拡張の無い json が入って戻されたように見える（**未調査**）
+
 ## Follow-Ups
 
 1. ✅ **flux-protocol に issue を立てた** —
@@ -224,9 +249,10 @@ Rapi（Ruby の小さな Web フレームワーク）のテストを `arc run` �
    塞ぐなら `git remote set-url --add --push github <両方の URL>` で 1 回の push を
    両フォージへ流すか、正本を一本化するかの判断が要る。
 
-9. **Windows 移植**（README の「9. Windows Support — Planned」）—— 2026-10-11 の節の「移植で要る物」。
-   ⭐ できると、dyna にシステムの Ruby を入れずに Rapi / Pharos を Windows で撃てる。
-10. **macOS の bootstrap** —— `resolve_ruby_url` に darwin の行が無い（ruby-builder には macOS 版がある）。
+9. 🔶 **Windows 移植** —— `fd3533f` で bootstrap / sync / run が動き、Rapi のテストが dyna で通った。
+   ⏸ 残り: **C 拡張をコンパイルする gem**（MSYS2 / DevKit が要る・2026-10-11 の節の末尾）／ dyna の `~/.local/bin` に `arc.exe` を置くか。
+10. **macOS の bootstrap** —— `resolve_ruby_urls` に darwin の行が無い（ruby-builder には macOS 版がある）。
+11. **グローバルの gem キャッシュが C 拡張の無い gem を戻す？** —— `Ignoring json-3.0.2 because its extensions are not built`（2026-10-11・未調査）。
 
 ## 関連
 
