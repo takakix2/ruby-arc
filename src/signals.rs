@@ -24,8 +24,11 @@ pub const FLUX_SOURCE: &str = "arc";
 
 /// グローバルなキャッシュディレクトリを取得する (~/.arc/cache)
 pub fn get_global_cache_dir() -> PathBuf {
-    // std::env::home_dir() は deprecated のため、HOME 環境変数を直接参照する
+    // std::env::home_dir() は deprecated のため、HOME 環境変数を直接参照する。
+    // Windows の素の席（cmd / hsh）には HOME が無いことがある —— `/tmp` に落ちると
+    // 今いるドライブの `\tmp` を指すので、USERPROFILE を先に見る。
     let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/tmp"));
     home.join(ARC_CACHE_ROOT)

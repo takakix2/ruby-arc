@@ -39,9 +39,20 @@ pub fn ruby_runtime_lib(env_path: &Path) -> PathBuf {
     ruby_runtime_root(env_path).join("lib")
 }
 
-/// `ruby_runtime/bin/ruby` パスを返す
+/// `ruby_runtime/bin/ruby` パスを返す（Windows は `ruby.exe`）
 pub fn ruby_bin(env_path: &Path) -> PathBuf {
-    ruby_runtime_bin(env_path).join("ruby")
+    ruby_bin_in(&ruby_runtime_root(env_path))
+}
+
+/// Ruby の木（`bin/` を持つ所）の中の ruby の実体
+pub fn ruby_bin_in(ruby_root: &Path) -> PathBuf {
+    ruby_root.join("bin").join(if cfg!(windows) { "ruby.exe" } else { "ruby" })
+}
+
+/// 裸の名前に付けて探す拡張子（順に）。Windows の RubyInstaller は `bundle.bat` / `gem.cmd` 等を持ち、
+/// 拡張子なしの `bundle` は Ruby のスクリプトで直接は起こせない ＝ 拡張子付きを先に、素の名前は最後。
+fn program_suffixes() -> &'static [&'static str] {
+    if cfg!(windows) { &[".exe", ".bat", ".cmd", ""] } else { &[""] }
 }
 
 /// 隔離環境で先に探す bin ディレクトリ。子の PATH の先頭に置く順と同じ。
@@ -60,7 +71,7 @@ pub fn resolve_isolated_program(cmd: &str, env_path: &Path) -> Option<PathBuf> {
     }
     isolated_bin_dirs(env_path)
         .into_iter()
-        .map(|dir| dir.join(cmd))
+        .flat_map(|dir| program_suffixes().iter().map(move |s| dir.join(format!("{cmd}{s}"))))
         .find(|p| p.is_file())
 }
 
@@ -245,8 +256,10 @@ pub fn inject_isolated_env(command: &mut Command, cwd: &Path) -> Result<()> {
     command.env("GEM_HOME",    gem_home(&env_path));
     command.env("BUNDLE_PATH", &env_path);
 
-    // LD_LIBRARY_PATH: 共有ライブラリの解決
-    if let Some(ld_path) = build_ld_library_path(&env_path) {
+    // LD_LIBRARY_PATH: 共有ライブラリの解決（Windows は DLL を exe の隣から読むので要らない）
+    if !cfg!(windows)
+        && let Some(ld_path) = build_ld_library_path(&env_path)
+    {
         command.env("LD_LIBRARY_PATH", ld_path);
     }
 
@@ -270,8 +283,12 @@ pub fn inject_isolated_env(command: &mut Command, cwd: &Path) -> Result<()> {
     };
     command.env("PATH", new_path);
 
-    // RUBYLIB: ポータブルRuby環境での標準ライブラリ解決
-    if let Some(rubylib) = build_rubylib_path(&env_path) {
+    // RUBYLIB: ポータブルRuby環境での標準ライブラリ解決。
+    // Windows の RubyInstaller は自分の置き場所から標準ライブラリを読める（📏 dyna で確認）ので足さない
+    // —— 足すと arch のディレクトリ名（x64-mingw-ucrt）を外した順の $LOAD_PATH を押し付けることになる。
+    if !cfg!(windows)
+        && let Some(rubylib) = build_rubylib_path(&env_path)
+    {
         command.env("RUBYLIB", rubylib);
     }
 
@@ -291,7 +308,7 @@ mod tests {
         let root = env::temp_dir().join(format!("arc-runner-test-{}", Uuid::now_v7()));
         let bin = ruby_runtime_bin(&root.join(ARC_ENV_DIR));
         std::fs::create_dir_all(&bin).unwrap();
-        std::fs::write(bin.join("ruby"), "").unwrap();
+        std::fs::write(ruby_bin(&root.join(ARC_ENV_DIR)), "").unwrap(); // Windows は ruby.exe
         std::fs::write(bin.join("bundle"), "").unwrap();
         std::fs::create_dir_all(ruby_runtime_lib(&root.join(ARC_ENV_DIR)).join("ruby").join("3.3.0")).unwrap();
         root

@@ -2,7 +2,7 @@ mod runner;
 
 use anyhow::{Context, Result};
 use serde_json::json;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::{env, fs};
 
 use crate::config::ArcConfig;
@@ -32,6 +32,10 @@ fn path_str(p: &Path) -> Result<&str> {
 /// `src` を `dest` へハードリンク優先でコピーする。
 /// `cp -al` が失敗した場合（ファイルシステムが異なる等）は `cp -r` にフォールバックする。
 fn cp_link_or_copy(src: &Path, dest: &Path) -> Result<()> {
+    // Windows に `cp` は無い（Git for Windows の物に頼らない）＝ Rust の中で同じことをする
+    if cfg!(windows) {
+        return link_or_copy_tree(src, dest);
+    }
     let ok = matches!(
         std::process::Command::new("cp")
             .args(["-al", path_str(src)?, path_str(dest)?])
@@ -51,6 +55,21 @@ fn cp_link_or_copy(src: &Path, dest: &Path) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// `cp -al src dest` と同じ形: 木を辿り、ファイルは 1 本ずつハードリンク（別のボリューム等で
+/// 失敗したらコピー）、ディレクトリは作る。`dest` は無い前提（在れば中へ足す）。
+fn link_or_copy_tree(src: &Path, dest: &Path) -> Result<()> {
+    if fs::symlink_metadata(src)?.is_dir() {
+        fs::create_dir_all(dest)?;
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            link_or_copy_tree(&entry.path(), &dest.join(entry.file_name()))?;
+        }
+    } else if fs::hard_link(src, dest).is_err() {
+        fs::copy(src, dest).with_context(|| format!("コピーに失敗しました: {:?} → {:?}", src, dest))?;
+    }
     Ok(())
 }
 
@@ -318,8 +337,14 @@ pub fn shell() -> Result<()> {
     let project = FluxProject::open(&cwd)
         .context("Flux プロジェクトが見つかりません。`arc init` を実行してください。")?;
 
-    // 起動するシェルを決定: $SHELL > /bin/bash
-    let shell_bin = env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+    // 起動するシェルを決定: $SHELL > /bin/bash（Windows は $SHELL > %COMSPEC% > cmd.exe）
+    let shell_bin = env::var("SHELL").unwrap_or_else(|_| {
+        if cfg!(windows) {
+            env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
+        } else {
+            "/bin/bash".to_string()
+        }
+    });
 
     eprintln!("🐚 arc shell: entering isolated environment");
     eprintln!("   Shell:   {}", shell_bin);
@@ -488,17 +513,46 @@ fn resolve_ruby_id(version: &str) -> String {
     format!("{}-{}-{}", version, env::consts::OS, env::consts::ARCH)
 }
 
-fn resolve_ruby_url(version: &str) -> Result<String> {
-    let suffix = match (env::consts::OS, env::consts::ARCH) {
-        ("linux", "x86_64")  => "ubuntu-24.04",
-        ("linux", "aarch64") => "ubuntu-24.04-arm64",
-        (os, arch) => anyhow::bail!("未対応のプラットフォームです: {} / {}", os, arch),
+/// Ruby の取り寄せ先の候補（先頭から試し、最初に取れた物を使う）。
+///
+/// - Linux: ruby-builder（GitHub Actions のツールキャッシュ）の `.tar.gz` が 1 つ
+/// - Windows: RubyInstaller の持ち運べる版（`.7z`）。📏 2026-10-11 dyna: インストールせずに
+///   その場から動く（`3.3.6 [x64-mingw-ucrt]`・標準ライブラリも自分の場所から読む）。
+///   ⚠️ 名前に**パッケージの版** `-N` が付き、版ごとに違う（3.3.6 は `-1` と `-2`）＝ 大きい方から試す
+fn resolve_ruby_urls(version: &str) -> Result<Vec<String>> {
+    let builder = |suffix: &str| {
+        format!(
+            "https://github.com/ruby/ruby-builder/releases/download/toolcache/ruby-{}-{}.tar.gz",
+            version, suffix
+        )
     };
+    Ok(match (env::consts::OS, env::consts::ARCH) {
+        ("linux", "x86_64")  => vec![builder("ubuntu-24.04")],
+        ("linux", "aarch64") => vec![builder("ubuntu-24.04-arm64")],
+        ("windows", "x86_64") => (1..=5)
+            .rev()
+            .map(|n| {
+                format!(
+                    "https://github.com/oneclick/rubyinstaller2/releases/download/RubyInstaller-{v}-{n}/rubyinstaller-{v}-{n}-x64.7z",
+                    v = version,
+                    n = n
+                )
+            })
+            .collect(),
+        (os, arch) => anyhow::bail!("未対応のプラットフォームです: {} / {}", os, arch),
+    })
+}
 
-    Ok(format!(
-        "https://github.com/ruby/ruby-builder/releases/download/toolcache/ruby-{}-{}.tar.gz",
-        version, suffix
-    ))
+/// 取り寄せと展開に使う外部コマンド。
+/// Windows は **System32 の `curl.exe` / `tar.exe` を絶対パスで**起こす —— `tar.exe` は bsdtar で `.7z` を読めるが、
+/// PATH に Git for Windows が居ると同名の GNU tar（`.7z` を読めない）が先に当たりうる。
+fn fetch_tool(name: &str) -> PathBuf {
+    if cfg!(windows) {
+        let root = env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+        Path::new(&root).join("System32").join(format!("{name}.exe"))
+    } else {
+        PathBuf::from(name)
+    }
 }
 
 /// `version`: CLI 引数で指定されたバージョン。None の場合は config.toml を参照する。
@@ -524,6 +578,11 @@ pub fn bootstrap(version_arg: Option<&str>) -> Result<()> {
         .join(resolve_ruby_id(&ruby_version));
     let ruby_dest = cwd.join(crate::signals::ARC_ENV_DIR).join("ruby_runtime");
 
+    // 中身の無い（半端な）ruby_runtime は、在っても無いのと同じ ＝ 消して置き直す
+    if ruby_dest.exists() && !runner::ruby_bin_in(&ruby_dest).is_file() {
+        eprintln!("🧹 プロジェクトの ruby_runtime に ruby が無いので置き直します: {:?}", ruby_dest);
+        fs::remove_dir_all(&ruby_dest).context("半端な ruby_runtime を消せませんでした")?;
+    }
     if ruby_dest.exists() {
         eprintln!("ℹ️  Ruby 実行環境は既にプロジェクト内に存在します: {:?}", ruby_dest);
         eprintln!("   バージョンを変更する場合は ruby_runtime を削除してから再実行してください。");
@@ -533,10 +592,17 @@ pub fn bootstrap(version_arg: Option<&str>) -> Result<()> {
     }
 
     // 1. グローバルキャッシュにあるか確認
-    let cache_hit = cache_dir.exists();
+    // 「ディレクトリが在る」ではなく「ruby の実体が在る」で判定する —— 取り寄せが途中で止まると
+    // 空（や半端）のディレクトリが残り、それを当たりとして中身の無い Ruby を置いていた
+    // （📏 2026-10-11 dyna: 未対応で止まった回の空ディレクトリを「Cache Hit」と読んだ）
+    let cache_hit = runner::ruby_bin_in(&cache_dir).is_file();
     if cache_hit {
         eprintln!("✨ Cache Hit: Ruby {} found in global cache.", ruby_version);
     } else {
+        if cache_dir.exists() {
+            eprintln!("🧹 キャッシュに半端な Ruby が残っていたので取り直します: {:?}", cache_dir);
+            fs::remove_dir_all(&cache_dir).context("半端なキャッシュを消せませんでした")?;
+        }
         download_ruby_to_cache(&cache_dir, &ruby_version)?;
     }
 
@@ -605,26 +671,38 @@ fn report_fixed_shebangs(result: Result<usize>) {
 /// Ruby バイナリをダウンロードしてキャッシュディレクトリに展開する。
 /// 失敗した場合はキャッシュディレクトリを削除してエラーを返す。
 fn download_ruby_to_cache(cache_dir: &Path, ruby_version: &str) -> Result<()> {
-    eprintln!("🚀 Cache Miss: Downloading Ruby {} from ruby-builder...", ruby_version);
+    let urls = resolve_ruby_urls(ruby_version)?;
+    let source = if cfg!(windows) { "RubyInstaller" } else { "ruby-builder" };
+    eprintln!("🚀 Cache Miss: Downloading Ruby {} from {}...", ruby_version, source);
     fs::create_dir_all(cache_dir).context("キャッシュディレクトリの作成に失敗しました")?;
 
-    let ruby_url = resolve_ruby_url(ruby_version)?;
-    let tmp_archive = cache_dir.join("download.tar.gz");
+    // `.tar.gz`（Linux）も `.7z`（Windows）も、tar（Windows は bsdtar）が中身から形を見分ける
+    let ext = if cfg!(windows) { "7z" } else { "tar.gz" };
+    let tmp_archive = cache_dir.join(format!("download.{ext}"));
 
-    let curl_ok = std::process::Command::new("curl")
-        .args(["-fL", "--progress-bar", "-o", path_str(&tmp_archive)?, &ruby_url])
-        .status()
-        .context("curl の起動に失敗しました")?
-        .success();
-
-    if !curl_ok {
-        let _ = fs::remove_dir_all(cache_dir);
-        anyhow::bail!("Ruby バイナリのダウンロードに失敗しました。");
+    // 候補を順に試し、最初に取れた物を使う（RubyInstaller はパッケージの版 `-N` が版ごとに違う）
+    let mut fetched = None;
+    for url in &urls {
+        let ok = std::process::Command::new(fetch_tool("curl"))
+            .args(["-fsL", "-o", path_str(&tmp_archive)?, url])
+            .status()
+            .context("curl の起動に失敗しました")?
+            .success();
+        if ok {
+            fetched = Some(url);
+            break;
+        }
     }
 
-    let tar_ok = std::process::Command::new("tar")
+    let Some(url) = fetched else {
+        let _ = fs::remove_dir_all(cache_dir);
+        anyhow::bail!("Ruby バイナリのダウンロードに失敗しました（試した先: {}）。", urls.join(" / "));
+    };
+    eprintln!("   ← {}", url);
+
+    let tar_ok = std::process::Command::new(fetch_tool("tar"))
         .args([
-            "-xzf", path_str(&tmp_archive)?,
+            "-xf",  path_str(&tmp_archive)?,
             "-C",   path_str(cache_dir)?,
             "--strip-components=1",
         ])
@@ -645,6 +723,21 @@ fn download_ruby_to_cache(cache_dir: &Path, ruby_version: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tree_is_linked_like_cp_al() {
+        let root = env::temp_dir().join(format!("arc-tree-test-{}", uuid::Uuid::now_v7()));
+        let src = root.join("src");
+        fs::create_dir_all(src.join("bin")).unwrap();
+        fs::create_dir_all(src.join("lib").join("ruby").join("3.3.0")).unwrap();
+        fs::write(src.join("bin").join("ruby.exe"), "r").unwrap();
+        fs::write(src.join("lib").join("ruby").join("3.3.0").join("json.rb"), "j").unwrap();
+        let dest = root.join("dest");
+        link_or_copy_tree(&src, &dest).unwrap();
+        assert_eq!(fs::read_to_string(dest.join("bin").join("ruby.exe")).unwrap(), "r");
+        assert_eq!(fs::read_to_string(dest.join("lib").join("ruby").join("3.3.0").join("json.rb")).unwrap(), "j");
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn a_ci_shebang_is_rewritten_without_touching_the_hardlinked_cache() {
