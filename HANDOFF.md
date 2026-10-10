@@ -300,6 +300,10 @@ Rapi（Ruby の小さな Web フレームワーク）のテストを `arc run` �
     ③ Ruby の版の一覧と取り寄せ（`uv python list` / `install` に当たる・今は bootstrap / `arc x` の中でだけ取る）
     ④ arc 自体の配り方（焼いた `arc.exe` を Gitea のリリースへ 等）
     ⑤ gem の解決が bundler 任せ（uv の速さには届かない・大きい話）
+14. 🐛 **`arc x` / `arc run` を止めても子が残る**（2026-10-11・Rapi #7 を撃っていて踏んだ）—— 📏 `arc x --with puma … -- -S puma …` を
+    裏で起こし、`arc` の PID に `kill` → **Puma（ruby・PPID 1）が残ってポートを握り続けた**。arc は子を `status()` で待つだけで、
+    受けたシグナルを子に渡さない。▶ 案: Linux / macOS の `arc x` は記録を残さないので **`exec` で ruby に置き換わる**（uvx と同じ）。
+    `arc run` は `cmd:end` を書くので置き換えられない ＝ SIGINT / SIGTERM を子へ渡してから待つ。Windows は job object で子を道連れにする
 
 ## 関連
 
