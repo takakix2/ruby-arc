@@ -202,7 +202,7 @@ Rapi（Ruby の小さな Web フレームワーク）のテストを `arc run` �
 - **`HOME` が無いとキャッシュが `/tmp`** —— Windows の素の席（cmd / hsh）は `HOME` を持たないことがあり、`/tmp` は今のドライブの `\tmp`。→ `USERPROFILE` を先に見る
 
 - 📏 テスト 13 件（`a_tree_is_linked_like_cp_al` を足した）・clippy 0 —— dyna（msvc）と blackcube の両方。blackcube は新しいプロジェクトと Rapi を arc で撃ち直して変わらず
-- 🚚 blackcube の `~/.local/bin/arc` を `fd3533f` に。⏸ **dyna の `~/.local/bin` には入れていない**（scratchpad で焼いた物で撃った・入れるかは 🧑 の判断待ち）
+- 🚚 blackcube の `~/.local/bin/arc` を `fd3533f` に。⏸ **dyna の `~/.local/bin` には入れていない**（scratchpad で焼いた物で撃った・入れるかは 🧑 の判断待ち）　🚚 **同日に置いた**（Follow-Ups 9）
 - ✅ Gitea / GitHub とも `fd3533f`。README の Windows の行を「Planned」→「🔶 一部」に
 
 ⏸ **残る壁: C 拡張をその場でコンパイルする gem**。📏 Rapi の `Gemfile.lock` で `bigdecimal 4.1.3`（sequel の依存）が `MSYS2 could not be found. Please run 'ridk install'` で入らず、**`arc sync` は rc=1**（rack と sqlite3 はビルド済みの物が配られているので入る）。RubyInstaller の持ち運べる版には DevKit（MSYS2）が無い。∴ **sequel を使う Pharos は Windows ではここで止まるはず**（撃っていない）。案: ① arc が MSYS2 も取ってくる（数百 MB〜GB）② ビルド済みの物が在る版に lock を合わせる
@@ -274,7 +274,7 @@ Rapi（Ruby の小さな Web フレームワーク）のテストを `arc run` �
    両フォージへ流すか、正本を一本化するかの判断が要る。
 
 9. ✅ **Windows 移植** —— `fd3533f`（bootstrap / sync / run）＋ `9f3116c`（`--devkit`）。Pharos が Ruby 4.0.7 で 15/15。
-   ⏸ 残り: dyna の `~/.local/bin` に `arc.exe` を置くか（🧑 の判断待ち）。
+   ✅ dyna の `~/.local/bin/arc.exe` に置いた（2026-10-11・🧑・`ec323d3` から焼いた）—— git-bash でも hsh でも `arc` で引ける
 10. 🔶 **macOS の bootstrap** —— `9f3116c` で `darwin-arm64` / `darwin-x64` を足した。**m4air で撃っていない**（`fix_ruby_shebangs` が要るか・`DYLD_*` が要るかも未確認）。
 11. **グローバルの gem キャッシュが C 拡張の無い gem を戻す？** —— `Ignoring json-3.0.2 because its extensions are not built`（2026-10-11・未調査）。
 12. ✅ **Rapi / Pharos を Ruby 4.0.7 の arc 管理に揃えた**（2026-10-11・🧑）—— Rapi `747f8f7`・Pharos `d030a7d`（`arc init`・`.flux/config.toml` を git に・lock に `x64-mingw-ucrt`）。blackcube と dyna（Gitea から取り直し）の両方で全部通過、dyna で `sync` の後も lock は書き換わらない。Rapi は `--devkit` 不要、Pharos は要る（Falcon / Puma / bigdecimal）
