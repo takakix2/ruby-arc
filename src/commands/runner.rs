@@ -221,6 +221,10 @@ pub fn run_with_flux(
     // 隔離モードの場合、環境変数を注入する
     if env_mode == ArcEnv::Isolated {
         inject_isolated_env(&mut command, cwd)?;
+        // `arc run` は lock の通りに動かす（`bundle exec` と同じ形・Follow-Ups 16）
+        if verb == "run" {
+            inject_bundler_setup(&mut command, cwd, cmd);
+        }
     }
 
     let timer = Instant::now();
@@ -274,6 +278,37 @@ Run `arc bootstrap` to install it.",
     }
     // PATH の先頭は ruby_runtime/bin、続いて .arc/env/bin（gem の実行ファイル）
     apply_ruby_root_env(command, &ruby_runtime_root(&env_path), &[env_path.join("bin")])
+}
+
+/// `arc run` の子を bundler の下で起こす: `BUNDLE_GEMFILE` と `RUBYOPT` の先頭に `-rbundler/setup`
+/// （`bundle exec` が子に渡すのと同じ 2 つ）。Gemfile の無いプロジェクトでは何もしない。
+///
+/// 📏 2026-10-11 dyna: GEM_HOME だけ向けて起こしていたので、RubyGems が**手元で一番新しい版**を選んでいた ——
+/// Rapi で `arc sync` が prism 1.9.0（lock の版）のビルドで落ちたのに、`arc run ruby test/all.rb` は
+/// Ruby に同梱の prism 1.8.1 を読んで 64 本通った ＝ 緑が「lock の通りに動いた」の証拠にならなかった。
+/// bundler の下なら、lock の版が入っていなければ `Bundler::GemNotFound` で止まる。
+///
+/// `bundle` / `gem` そのものには掛けない —— `bundle install` は入れる前に bundler/setup が
+/// 「まだ入っていない」で落ちる（`arc run bundle exec …` は bundler が自分で同じことをする）。
+pub fn inject_bundler_setup(command: &mut Command, cwd: &Path, cmd: &str) {
+    let gemfile = cwd.join("Gemfile");
+    if !gemfile.is_file() {
+        return;
+    }
+    let name = Path::new(cmd)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    if matches!(name.as_str(), "bundle" | "bundler" | "gem") {
+        return;
+    }
+    command.env("BUNDLE_GEMFILE", &gemfile);
+    let rubyopt = match env::var("RUBYOPT") {
+        Ok(cur) if cur.split_whitespace().any(|o| o == "-rbundler/setup") => cur,
+        Ok(cur) if !cur.trim().is_empty() => format!("-rbundler/setup {cur}"),
+        _ => "-rbundler/setup".to_string(),
+    };
+    command.env("RUBYOPT", rubyopt);
 }
 
 /// Ruby の木（`bin/` と `lib/` を持つ所）を子が使えるようにする: PATH・LD_LIBRARY_PATH・RUBYLIB。
@@ -366,6 +401,31 @@ mod tests {
         // 隔離環境に無い名前と、パスを含む名前は解決しない（呼び手がそのまま起こす）
         assert_eq!(resolve_isolated_program("sh", &env_path), None);
         assert_eq!(resolve_isolated_program("./bundle", &env_path), None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn arc_run_goes_through_bundler_only_when_there_is_a_gemfile() {
+        let root = fake_project();
+        let get = |c: &Command, name: &str| c.get_envs().find(|(k, _)| *k == name).and_then(|(_, v)| v.map(|v| v.to_os_string()));
+
+        // Gemfile が無い ＝ 何もしない
+        let mut command = Command::new("ruby");
+        inject_bundler_setup(&mut command, &root, "ruby");
+        assert_eq!(get(&command, "RUBYOPT"), None);
+
+        std::fs::write(root.join("Gemfile"), "").unwrap();
+        let mut command = Command::new("ruby");
+        inject_bundler_setup(&mut command, &root, "ruby");
+        assert!(get(&command, "RUBYOPT").unwrap().to_string_lossy().starts_with("-rbundler/setup"));
+        assert_eq!(get(&command, "BUNDLE_GEMFILE"), Some(root.join("Gemfile").into_os_string()));
+
+        // bundle / gem そのものには掛けない（bundle install が入れる前に落ちる）
+        for cmd in ["bundle", "gem", "bundle.bat", "/x/bin/bundle"] {
+            let mut command = Command::new(cmd);
+            inject_bundler_setup(&mut command, &root, cmd);
+            assert_eq!(get(&command, "RUBYOPT"), None, "{cmd}");
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 }
