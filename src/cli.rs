@@ -59,6 +59,10 @@ pub enum Commands {
     Bootstrap {
         /// 使用する Ruby バージョン (例: 3.4.0)。省略時は .arc/config.toml の値を使用。
         version: Option<String>,
+        /// Windows: C 拡張をコンパイルする道具（MSYS2 / DevKit・約 1GB）も入れる。
+        /// コンパイル済みの物が配られていない gem（例: bigdecimal）を入れるときだけ要る。
+        #[arg(long)]
+        devkit: bool,
     },
     /// Flux 管理下の環境でコマンドを実行する
     Run {

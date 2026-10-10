@@ -520,15 +520,30 @@ fn resolve_ruby_id(version: &str) -> String {
 ///   その場から動く（`3.3.6 [x64-mingw-ucrt]`・標準ライブラリも自分の場所から読む）。
 ///   ⚠️ 名前に**パッケージの版** `-N` が付き、版ごとに違う（3.3.6 は `-1` と `-2`）＝ 大きい方から試す
 fn resolve_ruby_urls(version: &str) -> Result<Vec<String>> {
-    let builder = |suffix: &str| {
-        format!(
-            "https://github.com/ruby/ruby-builder/releases/download/toolcache/ruby-{}-{}.tar.gz",
-            version, suffix
-        )
+    // ruby-builder は途中で配り方を変えた（📏 2026-10-11）:
+    //   新: 版ごとのリリース `ruby-<v>/ruby-<v>-<os>-<arch>.tar.gz`（4.0.x・3.4.7+ 等。x64 に `-x64` が付く）
+    //   旧: 1 つのリリース `toolcache/ruby-<v>-<os>[-arm64].tar.gz`（3.4.6 まで・3.3.6 等）
+    // 新しい形を先に試し、無ければ旧い形。
+    let builder = |new_suffix: &str, old_suffix: Option<&str>| {
+        let mut urls = vec![format!(
+            "https://github.com/ruby/ruby-builder/releases/download/ruby-{v}/ruby-{v}-{s}.tar.gz",
+            v = version,
+            s = new_suffix
+        )];
+        if let Some(old) = old_suffix {
+            urls.push(format!(
+                "https://github.com/ruby/ruby-builder/releases/download/toolcache/ruby-{}-{}.tar.gz",
+                version, old
+            ));
+        }
+        urls
     };
     Ok(match (env::consts::OS, env::consts::ARCH) {
-        ("linux", "x86_64")  => vec![builder("ubuntu-24.04")],
-        ("linux", "aarch64") => vec![builder("ubuntu-24.04-arm64")],
+        ("linux", "x86_64")  => builder("ubuntu-24.04-x64", Some("ubuntu-24.04")),
+        ("linux", "aarch64") => builder("ubuntu-24.04-arm64", Some("ubuntu-24.04-arm64")),
+        // macOS は新しい形だけ確かめた（4.0.7 に darwin-arm64 / darwin-x64 が在る）。m4air では未撃ち
+        ("macos", "aarch64") => builder("darwin-arm64", None),
+        ("macos", "x86_64")  => builder("darwin-x64", None),
         ("windows", "x86_64") => (1..=5)
             .rev()
             .map(|n| {
@@ -556,7 +571,7 @@ fn fetch_tool(name: &str) -> PathBuf {
 }
 
 /// `version`: CLI 引数で指定されたバージョン。None の場合は config.toml を参照する。
-pub fn bootstrap(version_arg: Option<&str>) -> Result<()> {
+pub fn bootstrap(version_arg: Option<&str>, devkit: bool) -> Result<()> {
     let cwd = env::current_dir()?;
     let project = FluxProject::open(&cwd)
         .context("Flux プロジェクトが見つかりません。`arc init` を実行してください。")?;
@@ -588,6 +603,10 @@ pub fn bootstrap(version_arg: Option<&str>) -> Result<()> {
         eprintln!("   バージョンを変更する場合は ruby_runtime を削除してから再実行してください。");
         // 既に置いた環境も、撃ち直せば 1 行目が直る（べき等）
         report_fixed_shebangs(fix_ruby_shebangs(&ruby_dest.join("bin")));
+        // `--devkit` は後から足せる（既に bootstrap 済みのプロジェクトでも）
+        if devkit {
+            add_devkit(&cache_dir, &ruby_dest)?;
+        }
         return Ok(());
     }
 
@@ -605,6 +624,11 @@ pub fn bootstrap(version_arg: Option<&str>) -> Result<()> {
         }
         download_ruby_to_cache(&cache_dir, &ruby_version)?;
     }
+    if devkit && cfg!(windows) {
+        ensure_devkit_in_cache(&cache_dir)?;
+    } else if devkit {
+        eprintln!("ℹ️  --devkit は Windows 用です（この OS はシステムのコンパイラで C 拡張をビルドする）。");
+    }
 
     // 2. キャッシュからプロジェクトへリンク/コピー
     eprintln!("⚡ Linking Ruby to project environment...");
@@ -620,10 +644,101 @@ pub fn bootstrap(version_arg: Option<&str>) -> Result<()> {
             "ruby_version": ruby_version,
             "cache_hit":    cache_hit,
             "dest":         ruby_dest.to_string_lossy(),
+            "devkit":       devkit && cfg!(windows),
         }),
     )?;
 
     eprintln!("✨ Ruby {} bootstrap complete!", ruby_version);
+    Ok(())
+}
+
+// ─────────────────────────────────────────────
+// Windows: DevKit（MSYS2 ＋ MINGW toolchain）
+// ─────────────────────────────────────────────
+
+/// MSYS2 の素の版（`.tar.xz`・約 43MB → 展開 256MB → toolchain を入れて約 1GB）
+const MSYS2_BASE_URL: &str = "https://repo.msys2.org/distrib/msys2-x86_64-latest.tar.xz";
+
+/// Ruby の木の中の DevKit が使える状態か（toolchain の gcc の実体で判定する）
+fn devkit_ready(ruby_root: &Path) -> bool {
+    ruby_root.join("msys64").join("ucrt64").join("bin").join("gcc.exe").is_file()
+}
+
+/// `--devkit`: C 拡張をコンパイルする道具を、**キャッシュの Ruby の中の `msys64`** に置く。
+///
+/// RubyInstaller は MSYS2 を**自分の置き場所の中の `msys64` から最初に探す**
+/// （`ruby_installer/runtime/msys2_installation.rb`）＝ そこに置けば `.arc/` の中で完結し、
+/// インストーラー（with Devkit 版の `.exe`・アンインストール情報を登録する）を使わずに済む。
+/// 📏 2026-10-11 dyna: 素の版を展開 → `ridk install 3`（80 秒）で `bigdecimal` がコンパイルできた。
+/// 約 1GB あるので既定では入れない（コンパイル済みの物が配られていない gem が要るときだけ）。
+fn ensure_devkit_in_cache(cache_dir: &Path) -> Result<()> {
+    if devkit_ready(cache_dir) {
+        eprintln!("✨ DevKit: already in the global cache.");
+        return Ok(());
+    }
+    let msys = cache_dir.join("msys64");
+    if msys.exists() {
+        eprintln!("🧹 キャッシュに半端な msys64 が残っていたので作り直します: {:?}", msys);
+        fs::remove_dir_all(&msys).context("半端な msys64 を消せませんでした")?;
+    }
+
+    eprintln!("🚀 DevKit: Downloading MSYS2 base ({})...", MSYS2_BASE_URL);
+    let archive = cache_dir.join("download-msys2.tar.xz");
+    let fetched = std::process::Command::new(fetch_tool("curl"))
+        .args(["-fsL", "-o", path_str(&archive)?, MSYS2_BASE_URL])
+        .status()
+        .context("curl の起動に失敗しました")?
+        .success();
+    if !fetched {
+        let _ = fs::remove_file(&archive);
+        anyhow::bail!("MSYS2 のダウンロードに失敗しました。");
+    }
+    // アーカイブの中身は `msys64/…` ＝ cache_dir に展開すれば cache_dir/msys64 になる
+    let extracted = std::process::Command::new(fetch_tool("tar"))
+        .args(["-xf", path_str(&archive)?, "-C", path_str(cache_dir)?])
+        .status()
+        .context("tar の起動に失敗しました")?
+        .success();
+    let _ = fs::remove_file(&archive);
+    if !extracted {
+        let _ = fs::remove_dir_all(&msys);
+        anyhow::bail!("MSYS2 の展開に失敗しました。");
+    }
+
+    eprintln!("⚡ DevKit: installing the MINGW toolchain (ridk install 3)...");
+    let ridk = cache_dir.join("bin").join("ridk.cmd");
+    let installed = std::process::Command::new(&ridk)
+        .args(["install", "3"])
+        .current_dir(cache_dir)
+        .status()
+        .with_context(|| format!("{:?} の起動に失敗しました", ridk))?
+        .success();
+    if !installed || !devkit_ready(cache_dir) {
+        let _ = fs::remove_dir_all(&msys);
+        anyhow::bail!("ridk install 3 に失敗しました（msys64 は消しました・撃ち直せば最初から）。");
+    }
+    eprintln!("✨ DevKit ready: {:?}", msys);
+    Ok(())
+}
+
+/// 既に bootstrap 済みのプロジェクトに DevKit を足す（キャッシュに作ってからリンク）
+fn add_devkit(cache_dir: &Path, ruby_dest: &Path) -> Result<()> {
+    if !cfg!(windows) {
+        eprintln!("ℹ️  --devkit は Windows 用です（この OS はシステムのコンパイラで C 拡張をビルドする）。");
+        return Ok(());
+    }
+    if devkit_ready(ruby_dest) {
+        eprintln!("✨ DevKit: already in the project.");
+        return Ok(());
+    }
+    ensure_devkit_in_cache(cache_dir)?;
+    let dest = ruby_dest.join("msys64");
+    if dest.exists() {
+        fs::remove_dir_all(&dest).context("半端な msys64 を消せませんでした")?;
+    }
+    eprintln!("⚡ Linking DevKit to project environment...");
+    cp_link_or_copy(&cache_dir.join("msys64"), &dest)?;
+    eprintln!("✨ DevKit linked.");
     Ok(())
 }
 

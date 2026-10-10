@@ -367,7 +367,7 @@ Three principles guide arc's design:
 | **6. arc shell** | ✅ Done | Interactive sub-shell with isolated env, Flux signal recording |
 | **7. Multi-version** | 📋 Planned | `arc use 3.4.0` alongside existing versions |
 | **8. Time Machine** | 🚀 Planned | `arc checkout <id>` / `arc reset` / Environment Replay |
-| **9. Windows Support** | 🔶 Partial (2026-10-11) | `bootstrap` fetches RubyInstaller's portable `.7z`; `sync` / `run` / `undo` work. Gems that compile a C extension need MSYS2 (DevKit), which the portable package does not carry |
+| **9. Windows Support** | ✅ (2026-10-11) | `bootstrap` fetches RubyInstaller's portable `.7z`; `sync` / `run` / `undo` work. `arc bootstrap --devkit` adds MSYS2 + the MINGW toolchain (~1GB) inside the cached Ruby, for gems that compile a C extension (Pharos: puma, io-event, bigdecimal … on Ruby 4.0.7) |
 | **10. flux-core crate** | 📦 Planned | Extract Flux Core as a standalone crate |
 | **11. macOS support** | 📋 Planned | ARM64 binary support |
 

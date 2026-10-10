@@ -354,7 +354,7 @@ arc の設計を導く 3 つの原則：
 | **5. 設定** | ✅ 完了 | `.flux/config.toml`、動的 Ruby バージョン |
 | **6. 複数バージョン** | 📋 計画中 | 既存バージョンと並行した `arc bootstrap 3.4.0` |
 | **7. タイムマシン機能 (v2)** | 🚀 計画中 | `arc checkout <id>` / `arc reset` / 環境の完全リプレイ |
-| **8. Windows サポート** | 🔶 一部（2026-10-11）| `bootstrap` が RubyInstaller の持ち運べる `.7z` を取る。`sync` / `run` / `undo` は動く。C 拡張をその場でコンパイルする gem は MSYS2（DevKit）が要り、持ち運べる版には入っていない |
+| **8. Windows サポート** | ✅（2026-10-11）| `bootstrap` が RubyInstaller の持ち運べる `.7z` を取る。`sync` / `run` / `undo` は動く。C 拡張をコンパイルする gem には `arc bootstrap --devkit`（MSYS2 ＋ MINGW toolchain・約 1GB をキャッシュの Ruby の中へ）。Pharos（puma・io-event・bigdecimal 等）が Ruby 4.0.7 で通った |
 | **9. flux-core クレート** | � 計画中 | Flux Core をスタンドアロンクレートとして抽出 |
 | **10. macOS サポート** | 📋 計画中 | ARM64 バイナリサポート |
 

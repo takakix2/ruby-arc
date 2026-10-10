@@ -21,7 +21,7 @@ fn main() -> Result<()> {
         Commands::Add { gem, version }              => commands::add(&gem, version.as_deref()),
         Commands::Remove { gem }                    => commands::remove(&gem),
         Commands::Undo                              => commands::undo(),
-        Commands::Bootstrap { version }             => commands::bootstrap(version.as_deref()),
+        Commands::Bootstrap { version, devkit }     => commands::bootstrap(version.as_deref(), devkit),
         Commands::Run { command }                   => commands::run(&command),
         Commands::Env                               => commands::env(),
         Commands::Shell                             => commands::shell(),
