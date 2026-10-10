@@ -44,6 +44,26 @@ pub fn ruby_bin(env_path: &Path) -> PathBuf {
     ruby_runtime_bin(env_path).join("ruby")
 }
 
+/// 隔離環境で先に探す bin ディレクトリ。子の PATH の先頭に置く順と同じ。
+pub fn isolated_bin_dirs(env_path: &Path) -> Vec<PathBuf> {
+    vec![ruby_runtime_bin(env_path), env_path.join("bin")]
+}
+
+/// 裸の名前（`bundle` 等）を、隔離環境の bin から実体に解決する。
+///
+/// `Command::new("bundle")` は子に渡す PATH ではなく **arc 自身の PATH** で探すので、
+/// 素の PATH に `bundle` が無い台では `arc sync` が `No such file or directory` で落ちていた。
+/// パスを含む名前と、隔離環境に無い名前は `None`（呼び手が今までどおり `cmd` で起こす）。
+pub fn resolve_isolated_program(cmd: &str, env_path: &Path) -> Option<PathBuf> {
+    if cmd.contains('/') || cmd.contains(std::path::MAIN_SEPARATOR) {
+        return None;
+    }
+    isolated_bin_dirs(env_path)
+        .into_iter()
+        .map(|dir| dir.join(cmd))
+        .find(|p| p.is_file())
+}
+
 /// LD_LIBRARY_PATH を構築する。
 /// `ruby_runtime/lib` が存在する場合、それを既存の値の先頭に追加する。
 pub fn build_ld_library_path(env_path: &Path) -> Option<OsString> {
@@ -67,14 +87,9 @@ pub fn build_ld_library_path(env_path: &Path) -> Option<OsString> {
 /// `ruby_runtime/lib/ruby/<version>/` ディレクトリを探索し、
 /// site_ruby / vendor_ruby / standard lib を RUBYLIB にセットする。
 /// ポータブルな GitHub Actions 由来の Ruby バイナリのパス問題を解決する。
-pub fn build_rubylib_path(env_path: &Path) -> Option<OsString> {
-    let ruby_lib_dir = ruby_runtime_lib(env_path).join("ruby");
-    if !ruby_lib_dir.exists() {
-        return None;
-    }
-
-    // 数字で始まるディレクトリを探す (例: "3.3.0")
-    let ver_dir = std::fs::read_dir(&ruby_lib_dir)
+/// `ruby_runtime/lib/ruby/` の中の API 版ディレクトリ名（例: "3.3.0"）。数字で始まる物を探す。
+pub fn ruby_api_dir_name(env_path: &Path) -> Option<String> {
+    std::fs::read_dir(ruby_runtime_lib(env_path).join("ruby"))
         .ok()?
         .flatten()
         .find(|e| {
@@ -82,11 +97,26 @@ pub fn build_rubylib_path(env_path: &Path) -> Option<OsString> {
                 && e.file_name()
                     .to_str()
                     .is_some_and(|n| n.chars().next().is_some_and(|c| c.is_numeric()))
-        })?;
+        })
+        .and_then(|e| e.file_name().to_str().map(str::to_string))
+}
 
-    let ver_path = ver_dir.path();
-    let ver_name = ver_dir.file_name();
-    let ver_name = ver_name.to_str()?;
+/// 子に渡す GEM_HOME。bundler は `BUNDLE_PATH`（`.arc/env`）の下の `ruby/<API 版>/` に入れるので、
+/// GEM_HOME もそこを指す ＝ `bundle exec` を通さない素の `ruby` からも gem が見える。
+/// ⚠️ `.arc/env` を指していた頃は、`arc sync` で入れた gem が `arc run ruby x.rb` から見えなかった。
+/// Ruby がまだ無い（API 版が分からない）ときは `.arc/env` のまま。
+pub fn gem_home(env_path: &Path) -> PathBuf {
+    match ruby_api_dir_name(env_path) {
+        Some(ver) => env_path.join("ruby").join(ver),
+        None => env_path.to_path_buf(),
+    }
+}
+
+pub fn build_rubylib_path(env_path: &Path) -> Option<OsString> {
+    let ruby_lib_dir = ruby_runtime_lib(env_path).join("ruby");
+    let ver_name = ruby_api_dir_name(env_path)?;
+    let ver_name = ver_name.as_str();
+    let ver_path = ruby_lib_dir.join(ver_name);
 
     let site_ruby   = ruby_lib_dir.join("site_ruby");
     let vendor_ruby = ruby_lib_dir.join("vendor_ruby");
@@ -162,7 +192,12 @@ pub fn run_with_flux(
         }),
     )?;
 
-    let mut command = Command::new(cmd);
+    let program = match env_mode {
+        ArcEnv::Isolated => resolve_isolated_program(cmd, &cwd.join(ARC_ENV_DIR))
+            .unwrap_or_else(|| PathBuf::from(cmd)),
+        ArcEnv::System => PathBuf::from(cmd),
+    };
+    let mut command = Command::new(&program);
     command.args(args);
 
     // 隔離モードの場合、環境変数を注入する
@@ -207,10 +242,8 @@ pub fn run_with_flux(
 /// `arc shell` からも再利用できるよう `pub` に公開している。
 pub fn inject_isolated_env(command: &mut Command, cwd: &Path) -> Result<()> {
     let env_path = cwd.join(ARC_ENV_DIR);
-    let gem_home = env_path.to_string_lossy().to_string();
-
-    command.env("GEM_HOME",    &gem_home);
-    command.env("BUNDLE_PATH", &gem_home);
+    command.env("GEM_HOME",    gem_home(&env_path));
+    command.env("BUNDLE_PATH", &env_path);
 
     // LD_LIBRARY_PATH: 共有ライブラリの解決
     if let Some(ld_path) = build_ld_library_path(&env_path) {
@@ -226,11 +259,10 @@ pub fn inject_isolated_env(command: &mut Command, cwd: &Path) -> Result<()> {
         );
     }
 
+    // 先頭に置くのは bin の**ディレクトリ**。`b9b6997` から `bin/ruby`（ファイル）を
+    // 置いていたので、子の中から `bundle` / `rake` 等が 1 つも引けなかった。
     let new_path = {
-        let mut paths = vec![
-            bin_path,
-            env_path.join("bin"),
-        ];
+        let mut paths = isolated_bin_dirs(&env_path);
         if let Some(current) = env::var_os("PATH") {
             paths.extend(env::split_paths(&current));
         }
@@ -244,4 +276,69 @@ pub fn inject_isolated_env(command: &mut Command, cwd: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+// ─────────────────────────────────────────────
+// テスト
+// ─────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `.arc/env/ruby_runtime/bin/{ruby,bundle}` を持つ使い捨てのプロジェクト
+    fn fake_project() -> PathBuf {
+        let root = env::temp_dir().join(format!("arc-runner-test-{}", Uuid::now_v7()));
+        let bin = ruby_runtime_bin(&root.join(ARC_ENV_DIR));
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("ruby"), "").unwrap();
+        std::fs::write(bin.join("bundle"), "").unwrap();
+        std::fs::create_dir_all(ruby_runtime_lib(&root.join(ARC_ENV_DIR)).join("ruby").join("3.3.0")).unwrap();
+        root
+    }
+
+    #[test]
+    fn gem_home_is_where_bundler_installs() {
+        let root = fake_project();
+        let env_path = root.join(ARC_ENV_DIR);
+        // bundler は BUNDLE_PATH（.arc/env）の下の ruby/<API 版>/ に入れる
+        assert_eq!(gem_home(&env_path), env_path.join("ruby").join("3.3.0"));
+        let mut command = Command::new("true");
+        inject_isolated_env(&mut command, &root).unwrap();
+        let get = |name: &str| command.get_envs().find(|(k, _)| *k == name).and_then(|(_, v)| v.map(PathBuf::from));
+        assert_eq!(get("GEM_HOME"), Some(env_path.join("ruby").join("3.3.0")));
+        assert_eq!(get("BUNDLE_PATH"), Some(env_path.clone()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_child_path_starts_with_the_runtime_bin_directory() {
+        let root = fake_project();
+        let mut command = Command::new("true");
+        inject_isolated_env(&mut command, &root).unwrap();
+        let path = command
+            .get_envs()
+            .find(|(k, _)| *k == "PATH")
+            .and_then(|(_, v)| v.map(|v| v.to_os_string()))
+            .unwrap();
+        let first = env::split_paths(&path).next().unwrap();
+        // b9b6997 から `bin/ruby`（ファイル）が先頭に入っていた
+        assert_eq!(first, ruby_runtime_bin(&root.join(ARC_ENV_DIR)));
+        assert!(first.is_dir());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_bare_name_resolves_to_the_isolated_bin() {
+        let root = fake_project();
+        let env_path = root.join(ARC_ENV_DIR);
+        assert_eq!(
+            resolve_isolated_program("bundle", &env_path),
+            Some(ruby_runtime_bin(&env_path).join("bundle"))
+        );
+        // 隔離環境に無い名前と、パスを含む名前は解決しない（呼び手がそのまま起こす）
+        assert_eq!(resolve_isolated_program("sh", &env_path), None);
+        assert_eq!(resolve_isolated_program("./bundle", &env_path), None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

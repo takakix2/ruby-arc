@@ -10,7 +10,7 @@ use crate::display;
 use crate::gemfile;
 use crate::signals::{FluxProject, SignalType};
 use uuid::Uuid;
-use runner::{ArcEnv, build_ld_library_path, inject_isolated_env, ruby_bin};
+use runner::{ArcEnv, build_ld_library_path, gem_home, inject_isolated_env, ruby_bin};
 
 // ─────────────────────────────────────────────
 // 定数
@@ -279,7 +279,7 @@ pub fn env() -> Result<()> {
     eprintln!();
     eprintln!("  Project:   {}", cwd.display());
     eprintln!("  ARC_ENV:   {}", env_dir.display());
-    eprintln!("  GEM_HOME:  {}", env_dir.display());
+    eprintln!("  GEM_HOME:  {}", gem_home(&env_dir).display());
     eprintln!("  Ruby:      {}",
         if ruby_bin_path.exists() { ruby_bin_path.display().to_string() }
         else { "(not bootstrapped — run `arc bootstrap`)".to_string() }
@@ -323,7 +323,7 @@ pub fn shell() -> Result<()> {
 
     eprintln!("🐚 arc shell: entering isolated environment");
     eprintln!("   Shell:   {}", shell_bin);
-    eprintln!("   GEM_HOME: {}", cwd.join(crate::signals::ARC_ENV_DIR).display());
+    eprintln!("   GEM_HOME: {}", gem_home(&cwd.join(crate::signals::ARC_ENV_DIR)).display());
     eprintln!("   Type 'exit' to leave the arc environment.");
     eprintln!();
 
@@ -527,6 +527,8 @@ pub fn bootstrap(version_arg: Option<&str>) -> Result<()> {
     if ruby_dest.exists() {
         eprintln!("ℹ️  Ruby 実行環境は既にプロジェクト内に存在します: {:?}", ruby_dest);
         eprintln!("   バージョンを変更する場合は ruby_runtime を削除してから再実行してください。");
+        // 既に置いた環境も、撃ち直せば 1 行目が直る（べき等）
+        report_fixed_shebangs(fix_ruby_shebangs(&ruby_dest.join("bin")));
         return Ok(());
     }
 
@@ -544,6 +546,7 @@ pub fn bootstrap(version_arg: Option<&str>) -> Result<()> {
         .context("ruby_dest の親ディレクトリが取得できません")?;
     fs::create_dir_all(ruby_env_dir)?;
     cp_link_or_copy(&cache_dir, &ruby_dest)?;
+    report_fixed_shebangs(fix_ruby_shebangs(&ruby_dest.join("bin")));
 
     project.record(
         SignalType::RuntimeLinked,
@@ -556,6 +559,47 @@ pub fn bootstrap(version_arg: Option<&str>) -> Result<()> {
 
     eprintln!("✨ Ruby {} bootstrap complete!", ruby_version);
     Ok(())
+}
+
+/// ruby-builder の Ruby は CI（`/opt/hostedtoolcache/…`）で焼かれているので、`bin/` の
+/// Ruby スクリプト（`bundle` / `gem` / `rake` …）の 1 行目が**その台に無い ruby** を指す ＝
+/// 起こすと ENOENT（`arc sync` が `bundle` を起こせなかった原因の 1 つ）。
+///
+/// `#!/usr/bin/env ruby` に書き直す（arc の子は PATH の先頭が `ruby_runtime/bin`）。
+/// ⚠️ `ruby_runtime` はキャッシュとハードリンクしているので、**その場で書き換えず、
+/// 外してから書き直す** ＝ キャッシュ（他のプロジェクトと共有）を汚さない。
+/// 存在する ruby を指す行・`env ruby` の行・Ruby 以外のファイルは触らない。返り値は直した本数。
+fn fix_ruby_shebangs(bin_dir: &Path) -> Result<usize> {
+    let mut fixed = 0;
+    for entry in fs::read_dir(bin_dir)? {
+        let path = entry?.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Ok(content) = fs::read(&path) else { continue };
+        let Some(eol) = content.iter().position(|&b| b == b'\n') else { continue };
+        let Some(interp) = content[..eol].strip_prefix(b"#!") else { continue };
+        let interp = String::from_utf8_lossy(interp).trim().to_string();
+        if !interp.ends_with("/ruby") || Path::new(&interp).exists() {
+            continue;
+        }
+        let perms = fs::metadata(&path)?.permissions();
+        let mut rewritten = b"#!/usr/bin/env ruby".to_vec();
+        rewritten.extend_from_slice(&content[eol..]);
+        fs::remove_file(&path)?;
+        fs::write(&path, &rewritten)?;
+        fs::set_permissions(&path, perms)?;
+        fixed += 1;
+    }
+    Ok(fixed)
+}
+
+fn report_fixed_shebangs(result: Result<usize>) {
+    match result {
+        Ok(0) => {}
+        Ok(n) => eprintln!("🔧 bin/ の Ruby スクリプト {} 本の 1 行目を `#!/usr/bin/env ruby` に直しました。", n),
+        Err(e) => eprintln!("⚠️  bin/ の 1 行目を直せませんでした: {}", e),
+    }
 }
 
 /// Ruby バイナリをダウンロードしてキャッシュディレクトリに展開する。
@@ -596,4 +640,31 @@ fn download_ruby_to_cache(cache_dir: &Path, ruby_version: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_ci_shebang_is_rewritten_without_touching_the_hardlinked_cache() {
+        let root = env::temp_dir().join(format!("arc-shebang-test-{}", uuid::Uuid::now_v7()));
+        let (cache, bin) = (root.join("cache"), root.join("bin"));
+        fs::create_dir_all(&cache).unwrap();
+        fs::create_dir_all(&bin).unwrap();
+        let ci = "#!/opt/hostedtoolcache/Ruby/3.3.6/x64/bin/ruby\nputs 1\n";
+        fs::write(cache.join("bundle"), ci).unwrap();
+        fs::hard_link(cache.join("bundle"), bin.join("bundle")).unwrap();
+        fs::write(bin.join("ok"), "#!/usr/bin/env ruby\nputs 2\n").unwrap();
+        fs::write(bin.join("sh-script"), "#!/bin/sh\necho 3\n").unwrap();
+
+        assert_eq!(fix_ruby_shebangs(&bin).unwrap(), 1);
+        assert_eq!(fs::read_to_string(bin.join("bundle")).unwrap(), "#!/usr/bin/env ruby\nputs 1\n");
+        // キャッシュ側（ハードリンクの相手）は元のまま
+        assert_eq!(fs::read_to_string(cache.join("bundle")).unwrap(), ci);
+        assert_eq!(fs::read_to_string(bin.join("sh-script")).unwrap(), "#!/bin/sh\necho 3\n");
+        // べき等: 2 回目は何もしない
+        assert_eq!(fix_ruby_shebangs(&bin).unwrap(), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
 }
