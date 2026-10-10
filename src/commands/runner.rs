@@ -224,12 +224,13 @@ pub fn run_with_flux(
     }
 
     let timer = Instant::now();
-    let status = command
-        .status()
+    // arc が止められても子を残さない（child.rs・Follow-Ups 14）
+    let status = super::child::run_tied(&mut command)
         .map_err(|e| anyhow::anyhow!("コマンド '{}' の起動に失敗しました: {}", cmd, e))?;
 
     let ms = timer.elapsed().as_millis() as u64;
-    let exit_code = status.code().unwrap_or(1);
+    // シグナルで死んだ子は 128 + シグナル番号（それまでは一律 1 を記録していた）
+    let exit_code = super::child::exit_code(&status);
 
     project.record(
         SignalType::CmdEnd,

@@ -1,3 +1,4 @@
+mod child;
 mod runner;
 
 use anyhow::{Context, Result};
@@ -369,12 +370,11 @@ pub fn shell() -> Result<()> {
         }),
     )?;
 
-    // インタラクティブシェルを起動。ユーザーが exit するまでブロック。
-    let status = command
-        .status()
+    // インタラクティブシェルを起動。ユーザーが exit するまでブロック（arc が消えればシェルも消える・child.rs）
+    let status = child::run_tied(&mut command)
         .map_err(|e| anyhow::anyhow!("シェル '{}' の起動に失敗しました: {}", shell_bin, e))?;
 
-    let exit_code = status.code().unwrap_or(0);
+    let exit_code = child::exit_code(&status);
     project.record(
         SignalType::SessionEnd,
         json!({
@@ -760,8 +760,9 @@ pub fn x(ruby: Option<&str>, with: &[String], devkit: bool, args: &[String]) -> 
     if let Some(g) = &gem_home {
         cmd.env("GEM_HOME", g);
     }
-    let status = cmd.status().with_context(|| format!("{:?} の起動に失敗しました", ruby))?;
-    std::process::exit(status.code().unwrap_or(1));
+    // 記録を残さないので、Linux / macOS は exec で ruby に置き換わる（arc を止めれば ruby が止まる・child.rs）
+    let code = child::exec_or_run(&mut cmd).with_context(|| format!("{:?} の起動に失敗しました", ruby))?;
+    std::process::exit(code);
 }
 
 // ─────────────────────────────────────────────
