@@ -209,6 +209,30 @@ Rapi（Ruby の小さな Web フレームワーク）のテストを `arc run` �
 
 📌 **別件（Linux で見た）**: blackcube の新しいプロジェクトで `Ignoring json-3.0.2 because its extensions are not built` が出た —— 同日に `arc add json` / `arc undo` を試したプロジェクトから、グローバルの gem キャッシュ（`harvest_gems` / `restore_gems`）に C 拡張の無い json が入って戻されたように見える（**未調査**）
 
+### 同日の続き —— `--devkit`（C 拡張）と Ruby 4.0.7（`9f3116c`）✅ Pharos が Windows で 15/15
+
+🧑 の方針: 古い同梱の bigdecimal に lock を合わせる案は**採らない**（「Ruby はもう 4 系、離れすぎ」）。**Windows は `--devkit` 方式**。
+
+- **`arc bootstrap --devkit`**（Windows）: キャッシュの Ruby の中に MSYS2 の素の版（`msys2-x86_64-latest.tar.xz`・43MB）を **`msys64`** として展開し、`ridk install 3`（MINGW toolchain）→ プロジェクトへハードリンク
+  - ⭐ RubyInstaller は MSYS2 を**自分の置き場所の中の `msys64` から最初に探す**（`msys2_installation.rb`）＝ `.arc/` の中で完結。with Devkit 版の `.exe`（138MB）はインストーラーで、アンインストール情報を登録するので使わない
+  - 用意できたかは `msys64/ucrt64/bin/gcc.exe` の実体で判定。半端な `msys64` は作り直す。bootstrap 済みのプロジェクトにも後から足せる。Linux / macOS では何もしない（「システムのコンパイラ」と言う）
+  - 📏 約 1GB（`msys64` 994MB）・初回 115 秒（Ruby ＋ MSYS2 ＋ toolchain）。MSYS2 のミラーで 404 / タイムアウトが数回出たが pacman が別のミラーで取り直した
+  - **既定では入れない** —— コンパイル済みの物が配られている gem（rack・sqlite3）は要らない。Rapi は要らず、Pharos は要る
+- **GCC 16 × Ruby 3.3.6 は通らない** —— 📏 MSYS2 の今の GCC（16.2）で、3.3.6 のヘッダと bigdecimal 4.1.3 が `incompatible-pointer-types` でエラー（`-Wno-error=…` を付ければ通る）。**4.0.7 では出ない**（Pharos の 6 本がそのまま通った）。∴ Windows で C 拡張を使うなら 4 系
+- **ruby-builder が配り方を変えていた** —— 新しい版（4.0.x・3.4.7+）は版ごとのリリース `ruby-<v>/ruby-<v>-ubuntu-24.04-x64.tar.gz`（x64 に `-x64`）で、`toolcache` には無い（4.0.7 / 3.4.11 は旧い形で 404）。→ 新しい形を先に、無ければ `toolcache`。**macOS（`darwin-arm64` / `darwin-x64`）も新しい形に在る**ので足した（Mac では未撃ち）
+
+📏 撃った結果:
+
+| | Ruby | 結果 |
+|---|---|---|
+| dyna（Windows・`--devkit`）| 4.0.7（RubyInstaller `-1`）| Pharos の `arc sync` が io-event / json / openssl / bigdecimal / nio4r / puma をコンパイル → `test_pharos.rb` **15/15** |
+| blackcube（Linux）| 4.0.7（新しい形から）| Rapi **117/117** ／ bigdecimal 4.1.3 も入る |
+| 両方 | — | テスト 13 件・clippy 0 |
+
+- 🚚 blackcube の `~/.local/bin/arc` を `9f3116c` に。✅ Gitea / GitHub とも `9f3116c`。README の Windows の行を ✅ に
+- 📌 計器: 最初に bigdecimal を手で撃ったとき「`ruby/ruby.h` が無い」と出たのは、**撃つ側が付けた `MSYS_NO_PATHCONV=1` が `make` に継がれ、MSYS の `/C/…` → `C:/…` 変換を止めた**ため。▶ DevKit を撃つときは git-bash を挟まない（PowerShell から）
+- 📌 dyna の `~/.arc/cache` に Ruby 4.0.7 ＋ `msys64` で約 1.1GB（プロジェクト側はハードリンク）
+
 ## Follow-Ups
 
 1. ✅ **flux-protocol に issue を立てた** —
@@ -249,10 +273,11 @@ Rapi（Ruby の小さな Web フレームワーク）のテストを `arc run` �
    塞ぐなら `git remote set-url --add --push github <両方の URL>` で 1 回の push を
    両フォージへ流すか、正本を一本化するかの判断が要る。
 
-9. 🔶 **Windows 移植** —— `fd3533f` で bootstrap / sync / run が動き、Rapi のテストが dyna で通った。
-   ⏸ 残り: **C 拡張をコンパイルする gem**（MSYS2 / DevKit が要る・2026-10-11 の節の末尾）／ dyna の `~/.local/bin` に `arc.exe` を置くか。
-10. **macOS の bootstrap** —— `resolve_ruby_urls` に darwin の行が無い（ruby-builder には macOS 版がある）。
+9. ✅ **Windows 移植** —— `fd3533f`（bootstrap / sync / run）＋ `9f3116c`（`--devkit`）。Pharos が Ruby 4.0.7 で 15/15。
+   ⏸ 残り: dyna の `~/.local/bin` に `arc.exe` を置くか（🧑 の判断待ち）。
+10. 🔶 **macOS の bootstrap** —— `9f3116c` で `darwin-arm64` / `darwin-x64` を足した。**m4air で撃っていない**（`fix_ruby_shebangs` が要るか・`DYLD_*` が要るかも未確認）。
 11. **グローバルの gem キャッシュが C 拡張の無い gem を戻す？** —— `Ignoring json-3.0.2 because its extensions are not built`（2026-10-11・未調査）。
+12. ⏸ **Rapi / Pharos を Ruby 4.0.7 の arc 管理に揃えるか**（Rapi は `.flux/config.toml` が 3.3.6、Pharos は arc 管理外）—— 🧑 の判断待ち。
 
 ## 関連
 
