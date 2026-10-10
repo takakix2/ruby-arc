@@ -603,18 +603,13 @@ pub fn bootstrap(version_arg: Option<&str>, devkit: bool) -> Result<()> {
         report_fixed_shebangs(fix_ruby_shebangs(&ruby_dest.join("bin")));
         // `--devkit` は後から足せる（既に bootstrap 済みのプロジェクトでも）
         if devkit {
-            add_devkit(&cache_dir, &ruby_dest)?;
+            add_devkit(&ruby_version, &ruby_dest)?;
         }
         return Ok(());
     }
 
     // 1. グローバルキャッシュに Ruby を用意する
     let cache_hit = ensure_ruby_in_cache(&ruby_version)?;
-    if devkit && cfg!(windows) {
-        ensure_devkit_in_cache(&cache_dir)?;
-    } else if devkit {
-        eprintln!("ℹ️  --devkit は Windows 用です（この OS はシステムのコンパイラで C 拡張をビルドする）。");
-    }
 
     // 2. キャッシュからプロジェクトへリンク/コピー
     eprintln!("⚡ Linking Ruby to project environment...");
@@ -623,6 +618,11 @@ pub fn bootstrap(version_arg: Option<&str>, devkit: bool) -> Result<()> {
     fs::create_dir_all(ruby_env_dir)?;
     cp_link_or_copy(&cache_dir, &ruby_dest)?;
     report_fixed_shebangs(fix_ruby_shebangs(&ruby_dest.join("bin")));
+
+    // 3. `--devkit` のときだけ msys64 を足す（キャッシュの Ruby には入っていない・`ensure_devkit_in_cache` の doc）
+    if devkit {
+        add_devkit(&ruby_version, &ruby_dest)?;
+    }
 
     project.record(
         SignalType::RuntimeLinked,
@@ -654,6 +654,7 @@ fn ensure_ruby_in_cache(version: &str) -> Result<bool> {
     let cache_dir = ruby_cache_dir(version);
     if runner::ruby_bin_in(&cache_dir).is_file() {
         eprintln!("✨ Cache Hit: Ruby {} found in global cache.", version);
+        move_legacy_devkit(version)?;
         return Ok(true);
     }
     if cache_dir.exists() {
@@ -713,12 +714,15 @@ fn gem_activations(gems: &[String]) -> String {
 pub fn x(ruby: Option<&str>, with: &[String], devkit: bool, args: &[String]) -> Result<()> {
     let version = ruby.unwrap_or(crate::config::DEFAULT_RUBY_VERSION).to_string();
     ensure_ruby_in_cache(&version)?;
-    let root = ruby_cache_dir(&version);
-    if devkit && cfg!(windows) {
-        ensure_devkit_in_cache(&root)?;
-    } else if devkit {
-        eprintln!("ℹ️  --devkit は Windows 用です（この OS はシステムのコンパイラで C 拡張をビルドする）。");
-    }
+    // `--devkit` は DevKit 付きの Ruby（`devkits/<id>`）から起こす ＝ 付けない回は msys64 の無い Ruby
+    let root = if devkit && cfg!(windows) {
+        ensure_devkit_in_cache(&version)?
+    } else {
+        if devkit {
+            eprintln!("ℹ️  --devkit は Windows 用です（この OS はシステムのコンパイラで C 拡張をビルドする）。");
+        }
+        ruby_cache_dir(&version)
+    };
     let ruby = runner::ruby_bin_in(&root);
 
     let gem_home = if with.is_empty() {
@@ -777,26 +781,50 @@ fn devkit_ready(ruby_root: &Path) -> bool {
     ruby_root.join("msys64").join("ucrt64").join("bin").join("gcc.exe").is_file()
 }
 
-/// `--devkit`: C 拡張をコンパイルする道具を、**キャッシュの Ruby の中の `msys64`** に置く。
+/// DevKit 付きの Ruby の置き場所（`~/.arc/cache/devkits/<v>-<os>-<arch>`）——
+/// キャッシュの Ruby をリンクした写しに `msys64` を足した物。
+fn devkit_cache_dir(version: &str) -> PathBuf {
+    crate::signals::get_global_cache_dir()
+        .join("devkits")
+        .join(resolve_ruby_id(version))
+}
+
+/// `--devkit`: C 拡張をコンパイルする道具（`msys64`）を入れた Ruby を、キャッシュに用意する。返り値はその置き場所。
 ///
 /// RubyInstaller は MSYS2 を**自分の置き場所の中の `msys64` から最初に探す**
 /// （`ruby_installer/runtime/msys2_installation.rb`）＝ そこに置けば `.arc/` の中で完結し、
 /// インストーラー（with Devkit 版の `.exe`・アンインストール情報を登録する）を使わずに済む。
 /// 📏 2026-10-11 dyna: 素の版を展開 → `ridk install 3`（80 秒）で `bigdecimal` がコンパイルできた。
 /// 約 1GB あるので既定では入れない（コンパイル済みの物が配られていない gem が要るときだけ）。
-fn ensure_devkit_in_cache(cache_dir: &Path) -> Result<()> {
-    if devkit_ready(cache_dir) {
-        eprintln!("✨ DevKit: already in the global cache.");
-        return Ok(());
+///
+/// ⚠️ **キャッシュの Ruby（`rubies/<id>`）には入れない** —— bootstrap はそれを丸ごとリンクするので、
+/// 一度誰かが `--devkit` を撃つと、以後その版の全プロジェクトに `msys64` が付いていた
+/// （📏 2026-10-11 dyna: Pharos の `--devkit` の後、Rapi を取り直したら付いてきた）＝
+/// 「DevKit 無しでも通るか」を確かめられない。∴ 別の木（`devkits/<id>`）に作り、
+/// `ridk install 3` もその木の Ruby で撃つ（RubyInstaller はその木の `msys64` を見る）。
+fn ensure_devkit_in_cache(version: &str) -> Result<PathBuf> {
+    ensure_ruby_in_cache(version)?;
+    let dk = devkit_cache_dir(version);
+    // Ruby の半分（キャッシュの Ruby をリンク）。中身の無い木は作り直す
+    if !runner::ruby_bin_in(&dk).is_file() {
+        if dk.exists() {
+            fs::remove_dir_all(&dk).context("半端な DevKit 付きの Ruby を消せませんでした")?;
+        }
+        fs::create_dir_all(dk.parent().context("devkits の親ディレクトリが取得できません")?)?;
+        cp_link_or_copy(&ruby_cache_dir(version), &dk)?;
     }
-    let msys = cache_dir.join("msys64");
+    if devkit_ready(&dk) {
+        eprintln!("✨ DevKit: already in the global cache.");
+        return Ok(dk);
+    }
+    let msys = dk.join("msys64");
     if msys.exists() {
         eprintln!("🧹 キャッシュに半端な msys64 が残っていたので作り直します: {:?}", msys);
         fs::remove_dir_all(&msys).context("半端な msys64 を消せませんでした")?;
     }
 
     eprintln!("🚀 DevKit: Downloading MSYS2 base ({})...", MSYS2_BASE_URL);
-    let archive = cache_dir.join("download-msys2.tar.xz");
+    let archive = dk.join("download-msys2.tar.xz");
     let fetched = std::process::Command::new(fetch_tool("curl"))
         .args(["-fsL", "-o", path_str(&archive)?, MSYS2_BASE_URL])
         .status()
@@ -806,9 +834,9 @@ fn ensure_devkit_in_cache(cache_dir: &Path) -> Result<()> {
         let _ = fs::remove_file(&archive);
         anyhow::bail!("MSYS2 のダウンロードに失敗しました。");
     }
-    // アーカイブの中身は `msys64/…` ＝ cache_dir に展開すれば cache_dir/msys64 になる
+    // アーカイブの中身は `msys64/…` ＝ dk に展開すれば dk/msys64 になる
     let extracted = std::process::Command::new(fetch_tool("tar"))
-        .args(["-xf", path_str(&archive)?, "-C", path_str(cache_dir)?])
+        .args(["-xf", path_str(&archive)?, "-C", path_str(&dk)?])
         .status()
         .context("tar の起動に失敗しました")?
         .success();
@@ -819,23 +847,45 @@ fn ensure_devkit_in_cache(cache_dir: &Path) -> Result<()> {
     }
 
     eprintln!("⚡ DevKit: installing the MINGW toolchain (ridk install 3)...");
-    let ridk = cache_dir.join("bin").join("ridk.cmd");
+    let ridk = dk.join("bin").join("ridk.cmd");
     let installed = std::process::Command::new(&ridk)
         .args(["install", "3"])
-        .current_dir(cache_dir)
+        .current_dir(&dk)
         .status()
         .with_context(|| format!("{:?} の起動に失敗しました", ridk))?
         .success();
-    if !installed || !devkit_ready(cache_dir) {
+    if !installed || !devkit_ready(&dk) {
         let _ = fs::remove_dir_all(&msys);
         anyhow::bail!("ridk install 3 に失敗しました（msys64 は消しました・撃ち直せば最初から）。");
     }
     eprintln!("✨ DevKit ready: {:?}", msys);
+    Ok(dk)
+}
+
+/// 古い arc がキャッシュの Ruby の中（`rubies/<id>/msys64`）に作った DevKit を、`devkits/<id>` へ移す。
+///
+/// 移すのはリンクで（1GB を取り直さない）、移し終えたらキャッシュ側を消す ＝ 以後の bootstrap に付かない。
+/// 既にリンクしたプロジェクトの `msys64` はハードリンクなので消えない。Windows 以外では何もしない。
+fn move_legacy_devkit(version: &str) -> Result<()> {
+    let legacy = ruby_cache_dir(version).join("msys64");
+    if !cfg!(windows) || !legacy.exists() {
+        return Ok(());
+    }
+    let dk = devkit_cache_dir(version);
+    if devkit_ready(&ruby_cache_dir(version)) && !devkit_ready(&dk) {
+        eprintln!("🚚 DevKit: キャッシュの Ruby の中の msys64 を {:?} へ移します（--devkit を頼まないプロジェクトに付かないように）", dk);
+        if dk.exists() {
+            fs::remove_dir_all(&dk).context("半端な DevKit 付きの Ruby を消せませんでした")?;
+        }
+        fs::create_dir_all(dk.parent().context("devkits の親ディレクトリが取得できません")?)?;
+        cp_link_or_copy(&ruby_cache_dir(version), &dk)?; // msys64 ごと
+    }
+    fs::remove_dir_all(&legacy).context("キャッシュの Ruby の中の msys64 を消せませんでした")?;
     Ok(())
 }
 
-/// 既に bootstrap 済みのプロジェクトに DevKit を足す（キャッシュに作ってからリンク）
-fn add_devkit(cache_dir: &Path, ruby_dest: &Path) -> Result<()> {
+/// プロジェクトの Ruby に DevKit を足す（キャッシュの DevKit 付きの Ruby から `msys64` だけリンク）
+fn add_devkit(version: &str, ruby_dest: &Path) -> Result<()> {
     if !cfg!(windows) {
         eprintln!("ℹ️  --devkit は Windows 用です（この OS はシステムのコンパイラで C 拡張をビルドする）。");
         return Ok(());
@@ -844,13 +894,13 @@ fn add_devkit(cache_dir: &Path, ruby_dest: &Path) -> Result<()> {
         eprintln!("✨ DevKit: already in the project.");
         return Ok(());
     }
-    ensure_devkit_in_cache(cache_dir)?;
+    let dk = ensure_devkit_in_cache(version)?;
     let dest = ruby_dest.join("msys64");
     if dest.exists() {
         fs::remove_dir_all(&dest).context("半端な msys64 を消せませんでした")?;
     }
     eprintln!("⚡ Linking DevKit to project environment...");
-    cp_link_or_copy(&cache_dir.join("msys64"), &dest)?;
+    cp_link_or_copy(&dk.join("msys64"), &dest)?;
     eprintln!("✨ DevKit linked.");
     Ok(())
 }
