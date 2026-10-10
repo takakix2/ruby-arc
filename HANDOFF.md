@@ -276,6 +276,32 @@ Rapi（Ruby の小さな Web フレームワーク）のテストを `arc run` �
 - ⚠️ 撃っていない: **Windows のコンソールで実際に Ctrl+C を押したとき**（確かめたのは「arc を強制終了すると子が道連れになる」まで）
 - 📌 計器: 被検体は `setsid` で別のプロセスグループに入れ、PID は起こしたときに控えた物だけを使った（名前で `pkill` しない）。⚠️ この席の `&` は SIGINT の無視を子に継がせる ＝ **SIGINT の行は直す前の版との比較に使えない**（直す前の arc も SIGINT で死ななかった）。直す前の版で残った ruby（dyna 2・blackcube 2）は args を確かめてから止めた
 
+### 同日の続き —— DevKit をキャッシュの Ruby の外へ（`42560e9`・Follow-Ups 15）
+
+踏んだ形: `--devkit` は `msys64` を**キャッシュの Ruby の中**（`rubies/<id>/msys64`）に作り、bootstrap はその木を**丸ごと**リンクしていた ＝ Pharos で一度 `--devkit` を撃った後、Rapi を取り直したら `--devkit` 無しでも `msys64` が付いてきた。
+
+| | 直し |
+|---|---|
+| 置き場所 | **`devkits/<id>`** —— キャッシュの Ruby をリンクした写し ＋ `msys64`。`ridk install 3` もこの木の Ruby で撃つ（RubyInstaller はこの木の `msys64` を見る）|
+| `arc bootstrap` | Ruby をリンクした後、**`--devkit` のときだけ** `devkits/<id>/msys64` を `ruby_runtime/msys64` へリンク（後から足すのも同じ道）|
+| `arc x --devkit` | `devkits/<id>` の Ruby で起こす。付けない回は `msys64` の無い `rubies/<id>` |
+| 古いキャッシュ | キャッシュに当たったとき `rubies/<id>/msys64` が在れば、`devkits/<id>` へリンクで移してから消す（📏 dyna で 13 秒・取り直さない）。既にリンクしたプロジェクトの `msys64` はハードリンクなので残る |
+
+📏 dyna で撃った（直した arc.exe・Gitea から取り直し）:
+
+| | 結果 |
+|---|---|
+| 移し替え（`arc x` を 1 回）| `rubies/4.0.7…/` から `msys64` が消え、`devkits/4.0.7…/msys64/ucrt64/bin/gcc.exe` が在る |
+| Rapi・`--devkit` 無し | `ruby_runtime` に `msys64` が**無い**。🚨 **`arc sync` は rc=5** —— **prism 1.9.0**（minitest 6 の依存・C 拡張）が `Could not create Makefile` で入らない |
+| 同じ clone に `--devkit` を足す（陽性対照）| `msys64` がリンクされ、prism 1.9.0 がビルドされて sync rc=0・テスト 64 本通過 |
+| Pharos・`--devkit` | sync rc=0・17/17 |
+| `arc x --with prism:1.9.0` | `--devkit` 無しは rc=1（`Error installing prism`）／ 付けると `1.9.0` |
+
+- テスト 15 件・clippy 0・`--target x86_64-pc-windows-gnu` の check も通過（blackcube）
+- 🚚 blackcube / dyna の `arc` を `42560e9` に（dyna は msvc で焼いた物・`src/commands/mod.rs` の sha256 が一致）
+- 🚨 **漏れが隠していた物が出た**: Rapi は「`--devkit` 不要」ではなかった（Follow-Ups 12 を訂正）。minitest 6 が prism を引き、lock の 1.9.0 には Windows 向けのビルド済みが無い。それでもテストが通って見えたのは、`arc run ruby test/all.rb` が **bundler を通らず**、Ruby 4.0.7 に同梱の **prism 1.8.1** を読んでいたから（Follow-Ups 16）
+- ⚠️ dyna の既存の作業ツリー（Rapi / Pharos の古い clone）の `msys64` は残っている（古い arc が置いた物で、arc からは頼まれたのか分からない）。要らなければ `ruby_runtime/msys64` を消すだけ
+
 ## Follow-Ups
 
 1. ✅ **flux-protocol に issue を立てた** —
@@ -323,18 +349,24 @@ Rapi（Ruby の小さな Web フレームワーク）のテストを `arc run` �
     📏 同日の後で**増えた**: blackcube で `Ignoring io-event-1.22.1` / `json-2.7.2` も出る（Pharos の gem・`arc x --with json:2.7.2` で入れた物）。
     🚨 **キャッシュは結果も変える** —— Rapi の Gemfile に `sequel` が在った頃、dyna の `sync` が DevKit 無しで通ったのは、Pharos で DevKit を使ってコンパイルした
     bigdecimal がキャッシュから戻されたからと見られる（未確認）。キャッシュに助けられない clone では rc=1 ＝ **同じ Gemfile で「通る / 通らない」が履歴で変わる**（Rapi HANDOFF 15）
-12. ✅ **Rapi / Pharos を Ruby 4.0.7 の arc 管理に揃えた**（2026-10-11・🧑）—— Rapi `747f8f7`・Pharos `d030a7d`（`arc init`・`.flux/config.toml` を git に・lock に `x64-mingw-ucrt`）。blackcube と dyna（Gitea から取り直し）の両方で全部通過、dyna で `sync` の後も lock は書き換わらない。Rapi は `--devkit` 不要、Pharos は要る（Falcon / Puma / bigdecimal）
+12. ✅ **Rapi / Pharos を Ruby 4.0.7 の arc 管理に揃えた**（2026-10-11・🧑）—— Rapi `747f8f7`・Pharos `d030a7d`（`arc init`・`.flux/config.toml` を git に・lock に `x64-mingw-ucrt`）。blackcube と dyna（Gitea から取り直し）の両方で全部通過、dyna で `sync` の後も lock は書き換わらない。Rapi は `--devkit` 不要、Pharos は要る（Falcon / Puma / bigdecimal）。
+    🚚 **訂正（同日・`42560e9`）: Rapi も Windows では要る** —— minitest 6 の依存 prism 1.9.0 が C 拡張。「不要」に見えたのは、漏れた `msys64`（Follow-Ups 15）と、bundler を通らない `arc run ruby …`（16）の 2 つが隠していたから
 13. **uv と比べて残っている物**（2026-10-11 に 🧑 と並べた・1 と 2 は済み）:
     ③ Ruby の版の一覧と取り寄せ（`uv python list` / `install` に当たる・今は bootstrap / `arc x` の中でだけ取る）
     ④ arc 自体の配り方（焼いた `arc.exe` を Gitea のリリースへ 等）
     ⑤ gem の解決が bundler 任せ（uv の速さには届かない・大きい話）
 14. ✅ **`arc x` / `arc run` を止めても子が残る** —— `ecc3c7b` で直した（2026-10-11 の節「arc を止めたら子も止まる」）。
     ⏸ 残り: Windows のコンソールで実際に Ctrl+C を押したときは未確認
-15. 🐛 **`--devkit` を付けなくても `msys64` が置かれる**（2026-10-11・dyna・Rapi を取り直して踏んだ）—— `ensure_devkit_in_cache` は
+15. ✅ **`42560e9` で直した**（2026-10-11 の節「DevKit をキャッシュの Ruby の外へ」）。以下は当時の記述。
+    🐛 **`--devkit` を付けなくても `msys64` が置かれる**（2026-10-11・dyna・Rapi を取り直して踏んだ）—— `ensure_devkit_in_cache` は
     **キャッシュの Ruby の中**（`rubies/<v>/msys64`）に作り、bootstrap はキャッシュの Ruby を**丸ごと**リンクする ＝ 誰かが一度 `--devkit` を撃つと、
     以後その版の全プロジェクトに `msys64` が付く（ハードリンクなのでディスクは増えない）。「`--devkit` は頼んだときだけ」が崩れ、
     **DevKit 無しでも通るか**を確かめられない。▶ 案: `msys64` をキャッシュの Ruby の外（`rubies/<v>-devkit/msys64` 等）に置き、`--devkit` のときだけ
     プロジェクトの `ruby_runtime/msys64` へリンクする（RubyInstaller が探すのは `<TOPDIR>/msys64` なので、プロジェクト側の置き場所は変わらない）
+16. 🐛 **`arc run ruby …` は lock を守らない**（2026-10-11・dyna）—— bundler を通さず GEM_HOME だけ向けて起こすので、RubyGems が**手元で一番新しい版**を選ぶ。
+    📏 Rapi で `arc sync` が prism 1.9.0 で落ちた（rc=5）のに、`arc run ruby test/all.rb` は 64 本通った —— 読んでいたのは Ruby 同梱の **prism 1.8.1**（lock は 1.9.0）。
+    ∴ **sync が失敗しても run は緑になりうる** ＝ 「lock の通りに動いた」の証拠にならない。`arc run bundle exec …` か `-rbundler/setup` なら bundler が lock で止める。
+    ▶ 案: `uv run` と同じく、`arc run` は既定で bundler の下で起こす（lock と食い違えば止まる）／ 少なくとも直前の sync が失敗していたら言う
 
 ## 関連
 
