@@ -64,6 +64,22 @@ pub enum Commands {
         #[arg(long)]
         devkit: bool,
     },
+    /// プロジェクト無しで Ruby を 1 回撃つ（uvx / npx に当たる）。例: arc x --with rack -- script.rb
+    /// キャッシュの Ruby を直接使い、.arc/ も記録も作らない。`--` の後ろは ruby への引数。
+    X {
+        /// 使う Ruby の版（省略時は arc の既定）
+        #[arg(long)]
+        ruby: Option<String>,
+        /// 一緒に使う gem（繰り返し可・`name:version` で版も指定できる）
+        #[arg(long = "with", value_name = "GEM")]
+        with: Vec<String>,
+        /// Windows: C 拡張をコンパイルする道具（MSYS2）も用意する
+        #[arg(long)]
+        devkit: bool,
+        /// ruby に渡す引数（`--` の後ろ。例: -e 'puts 1' / script.rb arg1）
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        args: Vec<String>,
+    },
     /// Flux 管理下の環境でコマンドを実行する
     Run {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]

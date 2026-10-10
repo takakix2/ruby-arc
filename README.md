@@ -64,7 +64,7 @@ cp target/release/arc ~/.local/bin/
 # Start a new Ruby project
 mkdir my_app && cd my_app
 arc init .
-arc bootstrap          # Download & link Ruby 3.3.6 in ~0.07s (from cache)
+arc bootstrap          # Download & link Ruby 4.0.7 in ~0.07s (from cache)
 
 # Manage gems
 arc add rails
@@ -95,6 +95,7 @@ arc state --diff
 | `arc remove <gem>` | Remove a gem from Gemfile and sync |
 | `arc sync` | Sync environment with Gemfile.lock (like `uv sync`) |
 | `arc run <cmd> [args...]` | Run a command in the isolated project environment |
+| `arc x [--ruby V] [--with GEM]... -- <ruby args>` | **Run Ruby once without a project** (like `uvx` / `npx`). Uses the cached Ruby, creates no `.arc/`, writes no log. `--with` gems (`name` or `name:version`) are cached per Ruby × gem set and reused |
 | `arc shell` | **Start an interactive shell inside the isolated environment** |
 | `arc exec <cmd> [args...]` | Run any command with Flux logging (system env) |
 | `arc env` | Show current environment info (Ruby path, GEM_HOME, version) |
@@ -166,7 +167,7 @@ arc uses a **global cache** at `~/.arc/cache/` — shared across all your projec
 
 ```bash
 # Project A: first time
-arc bootstrap    # Downloads Ruby 3.3.6 → ~30s
+arc bootstrap    # Downloads Ruby 4.0.7 → ~30s
 arc add nokogiri # Compiles C extension → ~20s
 
 # Project B: same versions

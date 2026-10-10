@@ -64,7 +64,7 @@ cp target/release/arc ~/.local/bin/
 # 新しい Ruby プロジェクトを開始
 mkdir my_app && cd my_app
 arc init .
-arc bootstrap          # Ruby 3.3.6 をダウンロード＆リンク（キャッシュから約 0.07 秒）
+arc bootstrap          # Ruby 4.0.7 をダウンロード＆リンク（キャッシュから約 0.07 秒）
 
 # gem を管理する
 arc add rails
@@ -92,6 +92,7 @@ arc state --diff
 | `arc remove <gem>` | Gemfile から gem を削除して同期 |
 | `arc sync` | Gemfile.lock と環境を同期（`uv sync` 相当） |
 | `arc run <cmd> [args...]` | 隔離されたプロジェクト環境でコマンドを実行 |
+| `arc x [--ruby V] [--with GEM]... -- <ruby の引数>` | **プロジェクト無しで Ruby を 1 回撃つ**（`uvx` / `npx` 相当）。キャッシュの Ruby を使い、`.arc/` も記録も作らない。`--with` の gem（`name` か `name:version`）は「Ruby の版 × gem の組」ごとにキャッシュして使い回す |
 | `arc exec <cmd> [args...]` | Flux ログ付きで任意のコマンドを実行 |
 | `arc env` | 現在の環境情報を表示（Ruby パス、GEM_HOME、バージョン） |
 | `arc undo` | 最後の `add` または `remove` 操作を取り消す |
@@ -155,7 +156,7 @@ arc は `~/.arc/cache/` に **グローバルキャッシュ** を使用しま�
 
 ```bash
 # プロジェクト A：初回
-arc bootstrap    # Ruby 3.3.6 をダウンロード → 約 30 秒
+arc bootstrap    # Ruby 4.0.7 をダウンロード → 約 30 秒
 arc add nokogiri # C 拡張をコンパイル → 約 20 秒
 
 # プロジェクト B：同じバージョン

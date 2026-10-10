@@ -34,11 +34,6 @@ pub fn ruby_runtime_bin(env_path: &Path) -> PathBuf {
     ruby_runtime_root(env_path).join("bin")
 }
 
-/// `ruby_runtime/lib` パスを返す
-pub fn ruby_runtime_lib(env_path: &Path) -> PathBuf {
-    ruby_runtime_root(env_path).join("lib")
-}
-
 /// `ruby_runtime/bin/ruby` パスを返す（Windows は `ruby.exe`）
 pub fn ruby_bin(env_path: &Path) -> PathBuf {
     ruby_bin_in(&ruby_runtime_root(env_path))
@@ -78,7 +73,13 @@ pub fn resolve_isolated_program(cmd: &str, env_path: &Path) -> Option<PathBuf> {
 /// LD_LIBRARY_PATH を構築する。
 /// `ruby_runtime/lib` が存在する場合、それを既存の値の先頭に追加する。
 pub fn build_ld_library_path(env_path: &Path) -> Option<OsString> {
-    let lib = ruby_runtime_lib(env_path);
+    ld_library_path_for(&ruby_runtime_root(env_path))
+}
+
+/// Ruby の木（`bin/` と `lib/` を持つ所）を指定して LD_LIBRARY_PATH を組む。
+/// プロジェクト（`ruby_runtime`）とキャッシュの Ruby（`arc x`）の両方から使う。
+pub fn ld_library_path_for(ruby_root: &Path) -> Option<OsString> {
+    let lib = ruby_root.join("lib");
     if !lib.exists() {
         return None;
     }
@@ -100,7 +101,12 @@ pub fn build_ld_library_path(env_path: &Path) -> Option<OsString> {
 /// ポータブルな GitHub Actions 由来の Ruby バイナリのパス問題を解決する。
 /// `ruby_runtime/lib/ruby/` の中の API 版ディレクトリ名（例: "3.3.0"）。数字で始まる物を探す。
 pub fn ruby_api_dir_name(env_path: &Path) -> Option<String> {
-    std::fs::read_dir(ruby_runtime_lib(env_path).join("ruby"))
+    api_dir_name_for(&ruby_runtime_root(env_path))
+}
+
+/// Ruby の木の `lib/ruby/` の中の API 版ディレクトリ名
+pub fn api_dir_name_for(ruby_root: &Path) -> Option<String> {
+    std::fs::read_dir(ruby_root.join("lib").join("ruby"))
         .ok()?
         .flatten()
         .find(|e| {
@@ -123,9 +129,10 @@ pub fn gem_home(env_path: &Path) -> PathBuf {
     }
 }
 
-pub fn build_rubylib_path(env_path: &Path) -> Option<OsString> {
-    let ruby_lib_dir = ruby_runtime_lib(env_path).join("ruby");
-    let ver_name = ruby_api_dir_name(env_path)?;
+/// Ruby の木を指定して RUBYLIB を組む
+pub fn rubylib_for(ruby_root: &Path) -> Option<OsString> {
+    let ruby_lib_dir = ruby_root.join("lib").join("ruby");
+    let ver_name = api_dir_name_for(ruby_root)?;
     let ver_name = ver_name.as_str();
     let ver_path = ruby_lib_dir.join(ver_name);
 
@@ -256,42 +263,44 @@ pub fn inject_isolated_env(command: &mut Command, cwd: &Path) -> Result<()> {
     command.env("GEM_HOME",    gem_home(&env_path));
     command.env("BUNDLE_PATH", &env_path);
 
-    // LD_LIBRARY_PATH: 共有ライブラリの解決（Windows は DLL を exe の隣から読むので要らない）
-    if !cfg!(windows)
-        && let Some(ld_path) = build_ld_library_path(&env_path)
-    {
-        command.env("LD_LIBRARY_PATH", ld_path);
-    }
-
-    // PATH: ruby_runtime/bin を最優先
     let bin_path = ruby_bin(&env_path);
     if !bin_path.exists() {
         anyhow::bail!(
-            "Ruby runtime not found in {:?}.\nRun `arc bootstrap` to install it.",
+            "Ruby runtime not found in {:?}.
+Run `arc bootstrap` to install it.",
             bin_path.parent().unwrap()
         );
     }
+    // PATH の先頭は ruby_runtime/bin、続いて .arc/env/bin（gem の実行ファイル）
+    apply_ruby_root_env(command, &ruby_runtime_root(&env_path), &[env_path.join("bin")])
+}
 
-    // 先頭に置くのは bin の**ディレクトリ**。`b9b6997` から `bin/ruby`（ファイル）を
-    // 置いていたので、子の中から `bundle` / `rake` 等が 1 つも引けなかった。
-    let new_path = {
-        let mut paths = isolated_bin_dirs(&env_path);
-        if let Some(current) = env::var_os("PATH") {
-            paths.extend(env::split_paths(&current));
-        }
-        env::join_paths(paths)?
-    };
-    command.env("PATH", new_path);
-
-    // RUBYLIB: ポータブルRuby環境での標準ライブラリ解決。
-    // Windows の RubyInstaller は自分の置き場所から標準ライブラリを読める（📏 dyna で確認）ので足さない
-    // —— 足すと arch のディレクトリ名（x64-mingw-ucrt）を外した順の $LOAD_PATH を押し付けることになる。
-    if !cfg!(windows)
-        && let Some(rubylib) = build_rubylib_path(&env_path)
-    {
-        command.env("RUBYLIB", rubylib);
+/// Ruby の木（`bin/` と `lib/` を持つ所）を子が使えるようにする: PATH・LD_LIBRARY_PATH・RUBYLIB。
+/// プロジェクト（`.arc/env/ruby_runtime`）とキャッシュの Ruby（`arc x`）の両方がここを通る。
+///
+/// - PATH の先頭は `<root>/bin`、続いて `extra_bins`、その後ろに今の PATH。
+///   ⚠️ 置くのは bin の**ディレクトリ**（`b9b6997` から `bin/ruby` というファイルを置いていて、
+///   子の中から `bundle` / `rake` が 1 つも引けなかった）
+/// - LD_LIBRARY_PATH: 📏 ruby-builder の Ruby は無いと `libruby.so.4.0` を見つけられずに起動しない
+///   （Windows は DLL を exe の隣から読むので足さない）
+/// - RUBYLIB: Windows の RubyInstaller は自分の置き場所から標準ライブラリを読める（📏 dyna）ので足さない
+///   —— 足すと arch のディレクトリ名（x64-mingw-ucrt）を外した順の $LOAD_PATH を押し付けることになる
+pub fn apply_ruby_root_env(command: &mut Command, ruby_root: &Path, extra_bins: &[PathBuf]) -> Result<()> {
+    let mut paths = vec![ruby_root.join("bin")];
+    paths.extend(extra_bins.iter().cloned());
+    if let Some(current) = env::var_os("PATH") {
+        paths.extend(env::split_paths(&current));
     }
+    command.env("PATH", env::join_paths(paths)?);
 
+    if !cfg!(windows) {
+        if let Some(ld_path) = ld_library_path_for(ruby_root) {
+            command.env("LD_LIBRARY_PATH", ld_path);
+        }
+        if let Some(rubylib) = rubylib_for(ruby_root) {
+            command.env("RUBYLIB", rubylib);
+        }
+    }
     Ok(())
 }
 
@@ -310,7 +319,7 @@ mod tests {
         std::fs::create_dir_all(&bin).unwrap();
         std::fs::write(ruby_bin(&root.join(ARC_ENV_DIR)), "").unwrap(); // Windows は ruby.exe
         std::fs::write(bin.join("bundle"), "").unwrap();
-        std::fs::create_dir_all(ruby_runtime_lib(&root.join(ARC_ENV_DIR)).join("ruby").join("3.3.0")).unwrap();
+        std::fs::create_dir_all(ruby_runtime_root(&root.join(ARC_ENV_DIR)).join("lib").join("ruby").join("4.0.0")).unwrap();
         root
     }
 
@@ -319,11 +328,11 @@ mod tests {
         let root = fake_project();
         let env_path = root.join(ARC_ENV_DIR);
         // bundler は BUNDLE_PATH（.arc/env）の下の ruby/<API 版>/ に入れる
-        assert_eq!(gem_home(&env_path), env_path.join("ruby").join("3.3.0"));
+        assert_eq!(gem_home(&env_path), env_path.join("ruby").join("4.0.0"));
         let mut command = Command::new("true");
         inject_isolated_env(&mut command, &root).unwrap();
         let get = |name: &str| command.get_envs().find(|(k, _)| *k == name).and_then(|(_, v)| v.map(PathBuf::from));
-        assert_eq!(get("GEM_HOME"), Some(env_path.join("ruby").join("3.3.0")));
+        assert_eq!(get("GEM_HOME"), Some(env_path.join("ruby").join("4.0.0")));
         assert_eq!(get("BUNDLE_PATH"), Some(env_path.clone()));
         std::fs::remove_dir_all(root).unwrap();
     }

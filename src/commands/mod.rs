@@ -588,9 +588,7 @@ pub fn bootstrap(version_arg: Option<&str>, devkit: bool) -> Result<()> {
         config.ruby.version.clone()
     };
 
-    let cache_dir = crate::signals::get_global_cache_dir()
-        .join("rubies")
-        .join(resolve_ruby_id(&ruby_version));
+    let cache_dir = ruby_cache_dir(&ruby_version);
     let ruby_dest = cwd.join(crate::signals::ARC_ENV_DIR).join("ruby_runtime");
 
     // 中身の無い（半端な）ruby_runtime は、在っても無いのと同じ ＝ 消して置き直す
@@ -610,20 +608,8 @@ pub fn bootstrap(version_arg: Option<&str>, devkit: bool) -> Result<()> {
         return Ok(());
     }
 
-    // 1. グローバルキャッシュにあるか確認
-    // 「ディレクトリが在る」ではなく「ruby の実体が在る」で判定する —— 取り寄せが途中で止まると
-    // 空（や半端）のディレクトリが残り、それを当たりとして中身の無い Ruby を置いていた
-    // （📏 2026-10-11 dyna: 未対応で止まった回の空ディレクトリを「Cache Hit」と読んだ）
-    let cache_hit = runner::ruby_bin_in(&cache_dir).is_file();
-    if cache_hit {
-        eprintln!("✨ Cache Hit: Ruby {} found in global cache.", ruby_version);
-    } else {
-        if cache_dir.exists() {
-            eprintln!("🧹 キャッシュに半端な Ruby が残っていたので取り直します: {:?}", cache_dir);
-            fs::remove_dir_all(&cache_dir).context("半端なキャッシュを消せませんでした")?;
-        }
-        download_ruby_to_cache(&cache_dir, &ruby_version)?;
-    }
+    // 1. グローバルキャッシュに Ruby を用意する
+    let cache_hit = ensure_ruby_in_cache(&ruby_version)?;
     if devkit && cfg!(windows) {
         ensure_devkit_in_cache(&cache_dir)?;
     } else if devkit {
@@ -650,6 +636,132 @@ pub fn bootstrap(version_arg: Option<&str>, devkit: bool) -> Result<()> {
 
     eprintln!("✨ Ruby {} bootstrap complete!", ruby_version);
     Ok(())
+}
+
+/// グローバルキャッシュの中の、その版の Ruby の置き場所（`~/.arc/cache/rubies/<v>-<os>-<arch>`）
+fn ruby_cache_dir(version: &str) -> PathBuf {
+    crate::signals::get_global_cache_dir()
+        .join("rubies")
+        .join(resolve_ruby_id(version))
+}
+
+/// その版の Ruby をグローバルキャッシュに用意する（`bootstrap` と `arc x` が共有）。返り値は当たったか。
+///
+/// 「ディレクトリが在る」ではなく「ruby の実体が在る」で判定する —— 取り寄せが途中で止まると
+/// 空（や半端）のディレクトリが残り、それを当たりとして中身の無い Ruby を置いていた
+/// （📏 2026-10-11 dyna: 未対応で止まった回の空ディレクトリを「Cache Hit」と読んだ）
+fn ensure_ruby_in_cache(version: &str) -> Result<bool> {
+    let cache_dir = ruby_cache_dir(version);
+    if runner::ruby_bin_in(&cache_dir).is_file() {
+        eprintln!("✨ Cache Hit: Ruby {} found in global cache.", version);
+        return Ok(true);
+    }
+    if cache_dir.exists() {
+        eprintln!("🧹 キャッシュに半端な Ruby が残っていたので取り直します: {:?}", cache_dir);
+        fs::remove_dir_all(&cache_dir).context("半端なキャッシュを消せませんでした")?;
+    }
+    download_ruby_to_cache(&cache_dir, version)?;
+    Ok(false)
+}
+
+// ─────────────────────────────────────────────
+// arc x —— プロジェクト無しで 1 回撃つ（uvx / npx に当たる）
+// ─────────────────────────────────────────────
+
+/// `--with` の gem の組をキャッシュの名前にする（並べ替え・重複除去・ファイル名に使えない字は `_`）
+fn gem_set_key(gems: &[String]) -> String {
+    let mut gems: Vec<String> = gems.iter().map(|g| g.trim().to_string()).filter(|g| !g.is_empty()).collect();
+    gems.sort();
+    gems.dedup();
+    gems.iter()
+        .map(|g| g.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '_' }).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
+/// `--with` の gem を有効にし、その場所を `$LOAD_PATH` の**先頭**に置く Ruby の行（bundler と同じ扱い）
+///
+/// 📏 2026-10-11: `gem "json", "2.7.2"` で有効にしても、Linux では `require "json"` が
+/// Ruby に同梱の 2.18.0 を読んだ —— arc は標準ライブラリを `RUBYLIB` で足しており
+/// （ruby-builder の Ruby は CI のパスでビルドされていて、無いと標準ライブラリを見つけられない）、
+/// RubyGems は gem の場所を `RUBYLIB` / `-I` の**後ろ**に差し込むため。Windows は `RUBYLIB` を
+/// 足さないので出ないが、同じ行で害は無い。`arc run`（bundler 経由）は bundler が先頭に置くので出ない。
+fn gem_activations(gems: &[String]) -> String {
+    gems.iter()
+        .map(|g| g.trim())
+        .filter(|g| !g.is_empty())
+        .map(|g| {
+            let (name, ver) = match g.split_once(':') {
+                Some((n, v)) => (n.trim(), Some(v.trim())),
+                None => (g, None),
+            };
+            let activate = match ver {
+                Some(v) => format!("gem {:?}, {:?}", name, v),
+                None => format!("gem {:?}", name),
+            };
+            format!("{activate}\n$LOAD_PATH.unshift(*Gem.loaded_specs[{name:?}].full_require_paths)\n")
+        })
+        .collect()
+}
+
+/// `arc x [--ruby V] [--with GEM]... [--devkit] -- <ruby の引数…>`
+///
+/// キャッシュの Ruby を直接起こす。**プロジェクトも `.arc/` も作らず、記録（Flux）も残さない**。
+/// `--with` の gem は「Ruby の版 × gem の組」ごとのキャッシュ（`~/.arc/cache/x/<ruby>/<組>`）に入れ、
+/// 2 回目からは使い回す（`name:version` の形で版も指定できる・`gem install` の綴り）。
+/// GEM_HOME だけを向け GEM_PATH は触らない ＝ Ruby に同梱の gem もそのまま見える。
+pub fn x(ruby: Option<&str>, with: &[String], devkit: bool, args: &[String]) -> Result<()> {
+    let version = ruby.unwrap_or(crate::config::DEFAULT_RUBY_VERSION).to_string();
+    ensure_ruby_in_cache(&version)?;
+    let root = ruby_cache_dir(&version);
+    if devkit && cfg!(windows) {
+        ensure_devkit_in_cache(&root)?;
+    } else if devkit {
+        eprintln!("ℹ️  --devkit は Windows 用です（この OS はシステムのコンパイラで C 拡張をビルドする）。");
+    }
+    let ruby = runner::ruby_bin_in(&root);
+
+    let gem_home = if with.is_empty() {
+        None
+    } else {
+        let dir = crate::signals::get_global_cache_dir()
+            .join("x")
+            .join(resolve_ruby_id(&version))
+            .join(gem_set_key(with));
+        let ready = dir.join(".arc-x-ready");
+        if !ready.is_file() {
+            eprintln!("⚡ arc x: gem install {} → {:?}", with.join(" "), dir);
+            let mut cmd = std::process::Command::new(&ruby);
+            cmd.args(["-S", "gem", "install", "--no-document", "--install-dir", path_str(&dir)?]);
+            cmd.args(with);
+            runner::apply_ruby_root_env(&mut cmd, &root, &[])?;
+            // gem install の話は stderr へ —— stdout は撃った台本の物（`arc x … | jq` で 1 回目だけ汚れていた）
+            cmd.stdout(std::io::stderr());
+            if !cmd.status().context("gem install の起動に失敗しました")?.success() {
+                anyhow::bail!("gem install に失敗しました: {}", with.join(" "));
+            }
+            fs::write(&ready, "")?;
+        }
+        Some(dir)
+    };
+
+    let mut cmd = std::process::Command::new(&ruby);
+    // `--with` の gem は、台本より先に有効にして `$LOAD_PATH` の先頭へ（`gem_activations` の doc）——
+    // 📏 RubyGems は require のとき手元で一番新しい版を選ぶので、何もしないと Ruby に同梱の gem
+    // （4.0.7 の json 2.18.0 等）が `--with json:2.7.2` で入れた版に勝つ
+    if let Some(g) = &gem_home {
+        let activate = g.join("arc-x-activate.rb");
+        fs::write(&activate, gem_activations(with))?;
+        cmd.arg(format!("-r{}", path_str(&activate)?));
+    }
+    cmd.args(args);
+    let extra: Vec<PathBuf> = gem_home.iter().map(|g| g.join("bin")).collect();
+    runner::apply_ruby_root_env(&mut cmd, &root, &extra)?;
+    if let Some(g) = &gem_home {
+        cmd.env("GEM_HOME", g);
+    }
+    let status = cmd.status().with_context(|| format!("{:?} の起動に失敗しました", ruby))?;
+    std::process::exit(status.code().unwrap_or(1));
 }
 
 // ─────────────────────────────────────────────
@@ -838,6 +950,26 @@ fn download_ruby_to_cache(cache_dir: &Path, ruby_version: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn with_gems_are_activated_and_put_first() {
+        let rb = gem_activations(&["rack".into(), "json:2.7.2".into()]);
+        assert_eq!(
+            rb,
+            concat!(
+                "gem \"rack\"\n$LOAD_PATH.unshift(*Gem.loaded_specs[\"rack\"].full_require_paths)\n",
+                "gem \"json\", \"2.7.2\"\n$LOAD_PATH.unshift(*Gem.loaded_specs[\"json\"].full_require_paths)\n",
+            )
+        );
+    }
+
+    #[test]
+    fn gem_set_key_is_order_independent_and_file_safe() {
+        let a = gem_set_key(&["rack".into(), "json:2.7.2".into(), "rack".into()]);
+        let b = gem_set_key(&["json:2.7.2".into(), "rack".into()]);
+        assert_eq!(a, b);
+        assert_eq!(a, "json_2.7.2+rack");
+    }
 
     #[test]
     fn a_tree_is_linked_like_cp_al() {

@@ -23,6 +23,7 @@ fn main() -> Result<()> {
         Commands::Undo                              => commands::undo(),
         Commands::Bootstrap { version, devkit }     => commands::bootstrap(version.as_deref(), devkit),
         Commands::Run { command }                   => commands::run(&command),
+        Commands::X { ruby, with, devkit, args }    => commands::x(ruby.as_deref(), &with, devkit, &args),
         Commands::Env                               => commands::env(),
         Commands::Shell                             => commands::shell(),
     }

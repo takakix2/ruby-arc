@@ -2,7 +2,7 @@
 //!
 //! ```toml
 //! [ruby]
-//! version = "3.3.6"
+//! version = "4.0.7"
 //! ```
 
 use anyhow::{Context, Result};
@@ -10,7 +10,12 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 const CONFIG_FILE: &str = "config.toml";
-const DEFAULT_RUBY_VERSION: &str = "3.3.6";
+/// `arc init` と `arc x` の既定の Ruby。
+/// 🚚 2026-10-11 に 3.3.6 → 4.0.7（その日の最新・Linux の ruby-builder と Windows の RubyInstaller の両方に在る）。
+/// 3.3.6 は 2026-02 の v1 で決め打ちから引き継いだ値で、選んだ理由は記録に無い。
+/// ⚠️ Windows で C 拡張を使うなら 4 系 —— MSYS2 の GCC 16 と 3.3.6 のヘッダは合わない（bigdecimal で実測）。
+/// init のたびに最新を調べには行かない（オフラインで止まる・GitHub API の回数制限）＝ ここを上げる。
+pub const DEFAULT_RUBY_VERSION: &str = "4.0.7";
 
 // ─────────────────────────────────────────────
 // 設定構造体
@@ -102,7 +107,7 @@ mod tests {
         let config = ArcConfig::default();
         config.save(&dir).unwrap();
         let loaded = ArcConfig::load(&dir).unwrap();
-        assert_eq!(loaded.ruby.version, "3.3.6");
+        assert_eq!(loaded.ruby.version, DEFAULT_RUBY_VERSION);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
