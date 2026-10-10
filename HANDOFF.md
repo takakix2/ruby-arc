@@ -302,6 +302,29 @@ Rapi（Ruby の小さな Web フレームワーク）のテストを `arc run` �
 - 🚨 **漏れが隠していた物が出た**: Rapi は「`--devkit` 不要」ではなかった（Follow-Ups 12 を訂正）。minitest 6 が prism を引き、lock の 1.9.0 には Windows 向けのビルド済みが無い。それでもテストが通って見えたのは、`arc run ruby test/all.rb` が **bundler を通らず**、Ruby 4.0.7 に同梱の **prism 1.8.1** を読んでいたから（Follow-Ups 16）
 - ⚠️ dyna の既存の作業ツリー（Rapi / Pharos の古い clone）の `msys64` は残っている（古い arc が置いた物で、arc からは頼まれたのか分からない）。要らなければ `ruby_runtime/msys64` を消すだけ
 
+### 同日の続き —— `arc run` は lock の通りに（`c518607`・Follow-Ups 16）
+
+踏んだ形: `arc run` は GEM_HOME を `.arc/env` に向けるだけで、RubyGems が**手元で一番新しい版**を選んでいた。📏 dyna の Rapi で `arc sync` が prism 1.9.0（lock の版）のビルドで落ちたのに、`arc run ruby test/all.rb` は Ruby 同梱の prism 1.8.1 で 64 本通った。
+
+直し: Gemfile の在るプロジェクトでは、`arc run` の子に **`BUNDLE_GEMFILE`** と **`RUBYOPT` の先頭の `-rbundler/setup`** を渡す（`bundle exec` が子に渡すのと同じ 2 つ・`runner::inject_bundler_setup`）。`uv run` と同じく「lock の通りでなければ動かない」。
+
+- ⚠️ **`bundle` / `gem` そのものには掛けない** —— `arc run bundle install` は入れる前に bundler/setup が「まだ入っていない」で落ちる。`arc run bundle exec …` は bundler が自分で同じことをするので変わらない
+- `arc sync`（`bundle install`）と `arc shell` は変えていない。`arc exec`（システムの環境）も変わらない
+- 既に `RUBYOPT` に `-rbundler/setup` が在れば足さない／他の `RUBYOPT` は後ろに残す
+
+📏 撃った（直した arc）:
+
+| | 結果 |
+|---|---|
+| dyna・Rapi を取り直し `--devkit` 無し | sync rc=5 → **run rc=1**: `Could not find prism-1.9.0 in locally installed gems (Bundler::GemNotFound)`（直す前は 64 本通過）|
+| 同じ clone に `--devkit` → sync | sync rc=0・run 64 本通過・`prism` は **1.9.0**（直す前は 1.8.1）|
+| dyna / blackcube の Pharos | 17/17 |
+| blackcube の Rapi | 64 本・`prism` 1.9.0・`arc run bundle exec ruby …` も通る |
+
+- テスト 16 件（`arc_run_goes_through_bundler_only_when_there_is_a_gemfile` を足した）・clippy 0・Windows 向けの check も通過
+- 🚚 blackcube / dyna の `arc` を `c518607` に（dyna は msvc で焼いた物・`runner.rs` の sha256 が一致）
+- ⏭ 止まり方は bundler のまま —— 📏 `Bundler::GemNotFound` の 1 行とバックトレース（計 11 行）で、**「`arc sync` を」とは言わない**。言わせるなら arc が子の stderr を読むか、起こす前に lock と入っている物を突き合わせることになる（uv は後者・起こす前に sync する）。今はしていない
+
 ## Follow-Ups
 
 1. ✅ **flux-protocol に issue を立てた** —
@@ -363,7 +386,8 @@ Rapi（Ruby の小さな Web フレームワーク）のテストを `arc run` �
     以後その版の全プロジェクトに `msys64` が付く（ハードリンクなのでディスクは増えない）。「`--devkit` は頼んだときだけ」が崩れ、
     **DevKit 無しでも通るか**を確かめられない。▶ 案: `msys64` をキャッシュの Ruby の外（`rubies/<v>-devkit/msys64` 等）に置き、`--devkit` のときだけ
     プロジェクトの `ruby_runtime/msys64` へリンクする（RubyInstaller が探すのは `<TOPDIR>/msys64` なので、プロジェクト側の置き場所は変わらない）
-16. 🐛 **`arc run ruby …` は lock を守らない**（2026-10-11・dyna）—— bundler を通さず GEM_HOME だけ向けて起こすので、RubyGems が**手元で一番新しい版**を選ぶ。
+16. ✅ **`c518607` で直した**（2026-10-11 の節「`arc run` は lock の通りに」）。以下は当時の記述。
+    🐛 **`arc run ruby …` は lock を守らない**（2026-10-11・dyna）—— bundler を通さず GEM_HOME だけ向けて起こすので、RubyGems が**手元で一番新しい版**を選ぶ。
     📏 Rapi で `arc sync` が prism 1.9.0 で落ちた（rc=5）のに、`arc run ruby test/all.rb` は 64 本通った —— 読んでいたのは Ruby 同梱の **prism 1.8.1**（lock は 1.9.0）。
     ∴ **sync が失敗しても run は緑になりうる** ＝ 「lock の通りに動いた」の証拠にならない。`arc run bundle exec …` か `-rbundler/setup` なら bundler が lock で止める。
     ▶ 案: `uv run` と同じく、`arc run` は既定で bundler の下で起こす（lock と食い違えば止まる）／ 少なくとも直前の sync が失敗していたら言う
