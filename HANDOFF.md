@@ -320,6 +320,9 @@ Rapi（Ruby の小さな Web フレームワーク）のテストを `arc run` �
    ✅ dyna の `~/.local/bin/arc.exe` に置いた（2026-10-11・🧑・`ec323d3` から焼いた）—— git-bash でも hsh でも `arc` で引ける
 10. 🔶 **macOS の bootstrap** —— `9f3116c` で `darwin-arm64` / `darwin-x64` を足した。**m4air で撃っていない**（`fix_ruby_shebangs` が要るか・`DYLD_*` が要るかも未確認）。
 11. **グローバルの gem キャッシュが C 拡張の無い gem を戻す？** —— `Ignoring json-3.0.2 because its extensions are not built`（2026-10-11・未調査）。
+    📏 同日の後で**増えた**: blackcube で `Ignoring io-event-1.22.1` / `json-2.7.2` も出る（Pharos の gem・`arc x --with json:2.7.2` で入れた物）。
+    🚨 **キャッシュは結果も変える** —— Rapi の Gemfile に `sequel` が在った頃、dyna の `sync` が DevKit 無しで通ったのは、Pharos で DevKit を使ってコンパイルした
+    bigdecimal がキャッシュから戻されたからと見られる（未確認）。キャッシュに助けられない clone では rc=1 ＝ **同じ Gemfile で「通る / 通らない」が履歴で変わる**（Rapi HANDOFF 15）
 12. ✅ **Rapi / Pharos を Ruby 4.0.7 の arc 管理に揃えた**（2026-10-11・🧑）—— Rapi `747f8f7`・Pharos `d030a7d`（`arc init`・`.flux/config.toml` を git に・lock に `x64-mingw-ucrt`）。blackcube と dyna（Gitea から取り直し）の両方で全部通過、dyna で `sync` の後も lock は書き換わらない。Rapi は `--devkit` 不要、Pharos は要る（Falcon / Puma / bigdecimal）
 13. **uv と比べて残っている物**（2026-10-11 に 🧑 と並べた・1 と 2 は済み）:
     ③ Ruby の版の一覧と取り寄せ（`uv python list` / `install` に当たる・今は bootstrap / `arc x` の中でだけ取る）
@@ -327,6 +330,11 @@ Rapi（Ruby の小さな Web フレームワーク）のテストを `arc run` �
     ⑤ gem の解決が bundler 任せ（uv の速さには届かない・大きい話）
 14. ✅ **`arc x` / `arc run` を止めても子が残る** —— `ecc3c7b` で直した（2026-10-11 の節「arc を止めたら子も止まる」）。
     ⏸ 残り: Windows のコンソールで実際に Ctrl+C を押したときは未確認
+15. 🐛 **`--devkit` を付けなくても `msys64` が置かれる**（2026-10-11・dyna・Rapi を取り直して踏んだ）—— `ensure_devkit_in_cache` は
+    **キャッシュの Ruby の中**（`rubies/<v>/msys64`）に作り、bootstrap はキャッシュの Ruby を**丸ごと**リンクする ＝ 誰かが一度 `--devkit` を撃つと、
+    以後その版の全プロジェクトに `msys64` が付く（ハードリンクなのでディスクは増えない）。「`--devkit` は頼んだときだけ」が崩れ、
+    **DevKit 無しでも通るか**を確かめられない。▶ 案: `msys64` をキャッシュの Ruby の外（`rubies/<v>-devkit/msys64` 等）に置き、`--devkit` のときだけ
+    プロジェクトの `ruby_runtime/msys64` へリンクする（RubyInstaller が探すのは `<TOPDIR>/msys64` なので、プロジェクト側の置き場所は変わらない）
 
 ## 関連
 
