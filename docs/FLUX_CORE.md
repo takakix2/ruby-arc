@@ -50,7 +50,7 @@ Ruby, Python, Node.js, Go, Rust — どのプロジェクトでも `.flux/signal
 ## Signal 仕様 — 正本は Flux Protocol v1
 
 🚨 **この節はもう仕様ではない。** Signal の形を決めているのは
-[`flux-protocol`](https://git.navii.online/takaki2/flux-protocol) の
+`flux-protocol` の
 `spec/PROTOCOL_v1.md` と `schema/flux-envelope.v1.schema.json` で、arc はその
 **消費者**である。ここに写しを置くと必ず片方が腐るので、以下は「arc が何を出すか」
 だけを書き、綴りの根拠は仕様に譲る。
@@ -77,13 +77,13 @@ Ruby, Python, Node.js, Go, Rust — どのプロジェクトでも `.flux/signal
 残りはすべて payload で、**入れ子にせずトップレベルに平らに並べる**。
 
 ⚠️ `type`/`event` にアンダースコアは使えない。旧 arc の `add_start` /
-`shell_enter` はこれに反していた（hsh も `job:job_started` で同じ罠を踏んでいる）。
+`shell_enter` はこれに反していた。
 自由形式の種別を作る口（旧 `SignalType::Custom`）を塞いであるのはそのため。
 
 ### 時刻 — `ts`
 
 `ts` は**出来事が起きた時刻**を生産者の時計で書いたもの。RFC 3339 + 明示的オフセット。
-arc は hsh と同じく UTC・マイクロ秒で書く。詳細と `rx_ts` / `mtime` との違いは
+arc は UTC・マイクロ秒で書く。詳細と `rx_ts` / `mtime` との違いは
 `PROTOCOL_v1.md` §2.05。
 
 ⚠️ **精度は生産者ごとに違う**ので、複数の生産者を混ぜたストリームを時刻だけで
@@ -105,7 +105,7 @@ arc は hsh と同じく UTC・マイクロ秒で書く。詳細と `rx_ts` / `m
 
 - `verb` は同じ `cmd:*` を出す 3 つの入口（`exec` / `sync` / `run`）を区別する。
 - `cmd:run` と `cmd:end` は**同じ `id`** を持つ。終端が始端を指すのではなく、
-  両者が同じ鍵を名乗る（hsh と同じ相関モデル）。
+  両者が同じ鍵を名乗る。
 - `cmd` は 1 本のコマンドライン、`args` は argv の忠実な形。空白を含む引数は
   `cmd` では潰れるので、機械が読むなら `args` を引く。
 

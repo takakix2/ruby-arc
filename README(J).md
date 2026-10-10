@@ -196,7 +196,7 @@ arc は **Flux Core** の上に構築されています — CLI ツールのた�
 
 ### Signal とは？
 
-arc が実行するすべての操作は、1つ以上の **Signal** を発行します — 追記専用ログに書き込まれる、構造化された不変のイベントです。1 行が [Flux Protocol v1](https://git.navii.online/takaki2/flux-protocol) の NDJSON レコード 1 件にあたります。
+arc が実行するすべての操作は、1つ以上の **Signal** を発行します — 追記専用ログに書き込まれる、構造化された不変のイベントです。1 行が Flux Protocol v1 の NDJSON レコード 1 件にあたります。
 
 ```json
 {"v":1,"source":"arc","type":"gem","event":"added","ts":"2026-08-22T07:30:15.177395+00:00","id":"019c70b2-5c33-7d03-9911-112233445566","gem":"rails","version":"~> 8.0"}
@@ -208,8 +208,8 @@ arc が実行するすべての操作は、1つ以上の **Signal** を発行し
 - **必須 4 フィールド** — `v` / `source` / `type` / `event`。残りはすべて payload で、同じ行にトップレベルで並ぶ。
 - **`type` は名詞、`event` はそれに起きたこと** — `gem:added`, `cmd:run`, `session:end`。小文字ケバブケースで、この組が Signal Registry の鍵になる。
 - **UUID v7 の `id`** — 時刻順にソート可能、グローバルに一意。
-- **同じ `id` で相関する** — `cmd:run` と `cmd:end` は**同じ** `id` を持つ。終端が始端を指すのではなく、両者が同じ鍵を名乗る（`hsh` と同じ相関モデル）。
-- **`ts` は出来事が起きた時刻** — RFC 3339 + 明示的オフセット、生産者の時計（[`PROTOCOL_v1.md` §2.05](https://git.navii.online/takaki2/flux-protocol)）。
+- **同じ `id` で相関する** — `cmd:run` と `cmd:end` は**同じ** `id` を持つ。終端が始端を指すのではなく、両者が同じ鍵を名乗る。
+- **`ts` は出来事が起きた時刻** — RFC 3339 + 明示的オフセット、生産者の時計（`PROTOCOL_v1.md` §2.05）。
 - **追記専用** — Signal は変更・削除されない。
 
 > **古いログを読むこと。** 2026-08-22 より前に書かれた journal は arc の

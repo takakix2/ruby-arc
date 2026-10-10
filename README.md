@@ -207,7 +207,7 @@ arc is built on **Flux Core** — a general-purpose event sourcing engine for CL
 
 ### What is a Signal?
 
-Every operation arc performs emits one or more **Signals** — structured, immutable events written to an append-only log. A signal is one line of [Flux Protocol v1](https://git.navii.online/takaki2/flux-protocol) NDJSON.
+Every operation arc performs emits one or more **Signals** — structured, immutable events written to an append-only log. A signal is one line of Flux Protocol v1 NDJSON.
 
 ```json
 {"v":1,"source":"arc","type":"gem","event":"added","ts":"2026-08-22T07:30:15.177395+00:00","id":"019c70b2-5c33-7d03-9911-112233445566","gem":"rails","version":"~> 8.0"}
@@ -220,7 +220,7 @@ Key properties:
 - **`type` is a noun, `event` is what happened to it** — `gem:added`, `cmd:run`, `session:end`. Lowercase kebab-case; the pair is how the Signal Registry is keyed.
 - **UUID v7 `id`** — time-sortable, globally unique.
 - **Correlated by a shared `id`** — `cmd:run` and `cmd:end` carry the **same** `id`, so a pair is a group-by rather than a pointer chase.
-- **`ts` is when it happened**, RFC 3339 with an explicit offset, on the producer's clock ([`PROTOCOL_v1.md` §2.05](https://git.navii.online/takaki2/flux-protocol)).
+- **`ts` is when it happened**, RFC 3339 with an explicit offset, on the producer's clock (`PROTOCOL_v1.md` §2.05).
 - **Append-only** — signals are never modified or deleted.
 
 > **Reading older logs.** Journals written before 2026-08-22 use arc's pre-protocol
@@ -351,7 +351,7 @@ Three principles guide arc's design:
 - **CLI Framework**: clap v4
 - **Serialization**: serde + serde_json + toml
 - **IDs**: UUID v7 (time-sortable, monotonic)
-- **Log Format**: [Flux Protocol v1](https://git.navii.online/takaki2/flux-protocol) NDJSON
+- **Log Format**: Flux Protocol v1 NDJSON
 - **Ruby Source**: [ruby/ruby-builder](https://github.com/ruby/ruby-builder) pre-compiled binaries
 
 ---

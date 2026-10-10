@@ -10,7 +10,7 @@
 **Goal**: Prove that Event Sourcing works for CLI tools.
 
 - [x] `FluxProject` struct with init/open lifecycle
-- [x] Signal schema — superseded 2026-08-22 by the [Flux Protocol v1](https://git.navii.online/takaki2/flux-protocol) envelope (`v` / `source` / `type` / `event` / `ts`, payload flat). The original shape was `id` (UUID v7), `type`, `payload`, `timestamp`.
+- [x] Signal schema — superseded 2026-08-22 by the Flux Protocol v1 envelope (`v` / `source` / `type` / `event` / `ts`, payload flat). The original shape was `id` (UUID v7), `type`, `payload`, `timestamp`.
 - [x] Append-only NDJSON log (`.flux/signals.jsonl`)
 - [x] `arc init` — project initialization with duplicate prevention
 - [x] `arc exec` — command execution with start/end correlation (a shared `id` since 2026-08-22; `ref_id` before that)
@@ -216,12 +216,12 @@ project.record(SignalType::CmdRun, json!({"cmd": "deploy", "target": "production
 ### 4.4 Flux Protocol Specification ✅
 
 **Done — and it left home.** This deliverable became its own repository,
-[`flux-protocol`](https://git.navii.online/takaki2/flux-protocol): `spec/PROTOCOL_v1.md`,
+`flux-protocol`: `spec/PROTOCOL_v1.md`,
 `schema/flux-envelope.v1.schema.json`, and a Signal Registry keyed by `type:event`.
-It is now spoken by `hsh`, `Doxa`, `watchtower`, `Tabula` and `flux-ship`.
+It is now spoken by several other tools as well.
 
 🚨 **The envelope changed while it was away**, so arc — the parent — could not read
-what its children speak. arc moved onto the v1 envelope on 2026-08-22; see `HANDOFF.md`.
+what its children speak. arc moved onto the v1 envelope on 2026-08-22.
 
 ### Deliverables
 

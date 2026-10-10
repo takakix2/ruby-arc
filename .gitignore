@@ -20,6 +20,6 @@ implementation_plan.md
 .env
 .env.*
 
-# Private development notes: branch "handoff" (Gitea only), checked out here with
+# Private development notes: branch "handoff" (not published), checked out here with
 #   git worktree add .handoff handoff
 .handoff/
