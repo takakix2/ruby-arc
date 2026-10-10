@@ -152,6 +152,38 @@ push は成功していた**。⇒ ディレクトリ（`~/dev/ruby-arc`）・�
 ⚠️ **バイナリ名は `arc` のまま**。README も `arc init .` のまま ——
 **人が打つ名前はリポ名とは別の決定**なので、改名に巻き込んでいない。
 
+## 2026-10-11 セッション（dyna の Claude 席）—— 隔離環境が使えなかった 4 つを直し、Windows で焼いて撃った（`3af2a74`）
+
+Rapi（Ruby の小さな Web フレームワーク）のテストを `arc run` で撃とうとして、arc 側で 4 つ踏んだ。
+🚨 **どれも「Ruby を要する経路」**で、m4air では試せない（上の注記）ため長く見えていなかった。
+
+| | 何が起きていたか | 直し |
+|---|---|---|
+| ① | 子の PATH の先頭が **`ruby_runtime/bin/ruby`（ファイル）** —— `b9b6997`（2026-02-19「clippy の警告を直す」）で `ruby_runtime_bin` が `ruby_bin` に化けた。子の中から `bundle` / `rake` が 1 つも引けない | `isolated_bin_dirs()`（`ruby_runtime/bin` と `.arc/env/bin`）を先頭に |
+| ② | `Command::new("bundle")` は**子に渡す PATH ではなく arc 自身の PATH** で探す ＝ 素の PATH に `bundle` が無い台（blackcube）では `arc sync` が `No such file or directory` | 裸の名前は隔離環境の bin で先に解決（`resolve_isolated_program()`）|
+| ③ | ruby-builder の Ruby は CI で焼かれており、`bin/` のスクリプトの 1 行目が **`#!/opt/hostedtoolcache/Ruby/3.3.6/x64/bin/ruby`**（どの台にも無い）＝ 絶対パスで起こしても ENOENT | `bootstrap` が `#!/usr/bin/env ruby` に書き直す（`fix_ruby_shebangs()`）。⚠️ `ruby_runtime` はキャッシュと**ハードリンク**なので、**外してから書き直す**（共有キャッシュを汚さない・テストで固定）。既に bootstrap 済みでも撃ち直せば直る（べき等）|
+| ④ | `GEM_HOME` が `.arc/env`、bundler が入れるのは `.arc/env/ruby/<API 版>/` ＝ `arc sync` で入れた gem が `arc run ruby x.rb` から見えない | `gem_home()` で bundler と同じ所を指す（`BUNDLE_PATH` は `.arc/env` のまま）。`arc env` / `arc shell` の表示も同じ関数から |
+
+- 📏 Rapi の `test_router.rb` を `arc run` で → **117 件・rc=0**（Ruby 3.3.6）。直す前は `require "rack"` で止まった
+- 📏 `cargo test` 12 件（③④①② の検体を足した）・clippy 0
+- 🚚 **blackcube の `~/.local/bin/arc` を `3af2a74` に入れ替えた**。前の版（2026-02-19・①を踏む前の焼き）は `arc.bak-20260219`
+- ✅ Gitea と GitHub の両方へ push（`main` = `origin/main` = `github/main` = `3af2a74` を実測）
+
+### Windows で焼いて撃った（dyna・msvc）
+
+**焼ける**（`cargo build --release` が通る・unix 専用のコードは無い）。📏 撃った結果:
+
+| 動く | 止まる |
+|---|---|
+| `init` / `state` / `exec`（`cmd /c echo hello`）/ `env` | `bootstrap` —— 「未対応のプラットフォームです: windows / x86_64」（`resolve_ruby_url` が Linux 2 種しか持たない）→ Ruby が無いので `run` / `add` / `shell` も「Ruby runtime not found」 |
+
+▶ **土台は動き、止まっているのは「Ruby をどこから取り、どう置くか」だけ**（🧑「整備すると動くようですね」）。移植で要る物（📌 読んだ範囲・未着手）:
+- Ruby の出所: RubyInstaller の持ち運べる版（`.7z`）—— Windows 標準の `tar.exe`（bsdtar）で展開できるはず（**未確認**）
+- `cp -al` / `cp -r`（外部コマンド）→ Rust の中でのハードリンク・コピー（Windows に `cp` は無い。Git for Windows の `cp` に頼らない）
+- `bin/ruby` → `ruby.exe`、`LD_LIBRARY_PATH` は Windows では意味が無い、`RUBYLIB` の arch ディレクトリ名（`x64-mingw-ucrt`）
+- `arc shell` は `$SHELL`（dyna では Git の bash を起こした）—— hsh を起こしたいなら `SHELL` を hsh に
+- ⚠️ **macOS も同じ所で止まる**（`resolve_ruby_url` に darwin が無い）—— m4air で Ruby の経路が試せない理由の半分はこれ
+
 ## Follow-Ups
 
 1. ✅ **flux-protocol に issue を立てた** —
@@ -191,6 +223,10 @@ push は成功していた**。⇒ ディレクトリ（`~/dev/ruby-arc`）・�
    ∴ 上の「次に潜る人が古い方から枝を切る」は**まだ構造的に起きる**。
    塞ぐなら `git remote set-url --add --push github <両方の URL>` で 1 回の push を
    両フォージへ流すか、正本を一本化するかの判断が要る。
+
+9. **Windows 移植**（README の「9. Windows Support — Planned」）—— 2026-10-11 の節の「移植で要る物」。
+   ⭐ できると、dyna にシステムの Ruby を入れずに Rapi / Pharos を Windows で撃てる。
+10. **macOS の bootstrap** —— `resolve_ruby_url` に darwin の行が無い（ruby-builder には macOS 版がある）。
 
 ## 関連
 
