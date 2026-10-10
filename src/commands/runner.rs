@@ -280,6 +280,18 @@ Run `arc bootstrap` to install it.",
     apply_ruby_root_env(command, &ruby_runtime_root(&env_path), &[env_path.join("bin")])
 }
 
+/// `arc run <cmd>` を bundler の下で起こすか: Gemfile が在り、`bundle` / `gem` そのものではないとき
+pub fn goes_through_bundler(cwd: &Path, cmd: &str) -> bool {
+    if !cwd.join("Gemfile").is_file() {
+        return false;
+    }
+    let name = Path::new(cmd)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    !matches!(name.as_str(), "bundle" | "bundler" | "gem")
+}
+
 /// `arc run` の子を bundler の下で起こす: `BUNDLE_GEMFILE` と `RUBYOPT` の先頭に `-rbundler/setup`
 /// （`bundle exec` が子に渡すのと同じ 2 つ）。Gemfile の無いプロジェクトでは何もしない。
 ///
@@ -291,18 +303,10 @@ Run `arc bootstrap` to install it.",
 /// `bundle` / `gem` そのものには掛けない —— `bundle install` は入れる前に bundler/setup が
 /// 「まだ入っていない」で落ちる（`arc run bundle exec …` は bundler が自分で同じことをする）。
 pub fn inject_bundler_setup(command: &mut Command, cwd: &Path, cmd: &str) {
-    let gemfile = cwd.join("Gemfile");
-    if !gemfile.is_file() {
+    if !goes_through_bundler(cwd, cmd) {
         return;
     }
-    let name = Path::new(cmd)
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-    if matches!(name.as_str(), "bundle" | "bundler" | "gem") {
-        return;
-    }
-    command.env("BUNDLE_GEMFILE", &gemfile);
+    command.env("BUNDLE_GEMFILE", cwd.join("Gemfile"));
     let rubyopt = match env::var("RUBYOPT") {
         Ok(cur) if cur.split_whitespace().any(|o| o == "-rbundler/setup") => cur,
         Ok(cur) if !cur.trim().is_empty() => format!("-rbundler/setup {cur}"),

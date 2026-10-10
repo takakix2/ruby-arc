@@ -207,6 +207,9 @@ fn install_with(project: &FluxProject, cwd: &Path) -> Result<()> {
 
     eprintln!("⚡ arc: bundle install → {}", crate::signals::ARC_ENV_DIR);
 
+    // 写しは先に消す —— bundle install が落ちると run_with_flux はその場で exit するので、
+    // 「落ちた sync の後に古い写しが残って一致する」を作らない
+    forget_synced(cwd)?;
     let args = vec!["install".to_string()];
     runner::run_with_flux(
         project,
@@ -216,11 +219,83 @@ fn install_with(project: &FluxProject, cwd: &Path) -> Result<()> {
         cwd,
         ArcEnv::Isolated,
     )?;
+    remember_synced(cwd)?;
 
     // 2. 新しく入った Gem をキャッシュに保存 (将来のプロジェクト用)
     let _ = harvest_gems(cwd, &ruby_api_ver);
 
     Ok(())
+}
+
+// ─────────────────────────────────────────────
+// 最後に通った sync の写し（`arc run` の前に突き合わせる・uv run と同じ順）
+// ─────────────────────────────────────────────
+
+/// sync が通ったときの `Gemfile` / `Gemfile.lock` の写しの置き場所
+fn synced_dir(cwd: &Path) -> PathBuf {
+    cwd.join(crate::signals::ARC_ENV_DIR).join(".synced")
+}
+
+const SYNCED_FILES: [&str; 2] = ["Gemfile", "Gemfile.lock"];
+
+fn forget_synced(cwd: &Path) -> Result<()> {
+    let dir = synced_dir(cwd);
+    if dir.exists() {
+        fs::remove_dir_all(&dir).context("sync の写しを消せませんでした")?;
+    }
+    Ok(())
+}
+
+fn remember_synced(cwd: &Path) -> Result<()> {
+    let dir = synced_dir(cwd);
+    fs::create_dir_all(&dir)?;
+    for name in SYNCED_FILES {
+        if cwd.join(name).is_file() {
+            fs::copy(cwd.join(name), dir.join(name)).with_context(|| format!("{name} の写しを置けませんでした"))?;
+        }
+    }
+    Ok(())
+}
+
+/// 最後に通った sync から `Gemfile` / `Gemfile.lock` が変わっていないか（バイトで比べる・Ruby を起こさない）。
+/// 写しが無い ＝ sync が通っていない（落ちた・まだ撃っていない・写しを置く前の arc で撃った）
+fn synced_matches(cwd: &Path) -> bool {
+    let dir = synced_dir(cwd);
+    dir.is_dir()
+        && SYNCED_FILES.iter().all(|name| match (fs::read(cwd.join(name)), fs::read(dir.join(name))) {
+            (Ok(now), Ok(then)) => now == then,
+            (Err(_), Err(_)) => true, // どちらにも無い（lock の無いプロジェクト）
+            _ => false,
+        })
+}
+
+#[cfg(test)]
+mod synced_tests {
+    use super::*;
+
+    #[test]
+    fn run_is_allowed_only_after_a_sync_of_the_same_gemfile_and_lock() {
+        let root = env::temp_dir().join(format!("arc-synced-test-{}", uuid::Uuid::now_v7()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("Gemfile"), "gem \"rack\"\n").unwrap();
+        fs::write(root.join("Gemfile.lock"), "rack (3.2.7)\n").unwrap();
+
+        assert!(!synced_matches(&root), "sync をまだ撃っていない");
+        remember_synced(&root).unwrap();
+        assert!(synced_matches(&root));
+
+        fs::write(root.join("Gemfile.lock"), "rack (3.2.8)\n").unwrap();
+        assert!(!synced_matches(&root), "lock が変わった");
+        remember_synced(&root).unwrap();
+        assert!(synced_matches(&root));
+
+        fs::remove_file(root.join("Gemfile.lock")).unwrap();
+        assert!(!synced_matches(&root), "lock が消えた");
+
+        forget_synced(&root).unwrap();
+        assert!(!synced_matches(&root), "落ちた sync の後");
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 // ─────────────────────────────────────────────
@@ -276,6 +351,14 @@ pub fn run(args: &[String]) -> Result<()> {
         .context("Flux プロジェクトが見つかりません。`arc init` を実行してください。")?;
 
     let (cmd, cmd_args) = (&args[0], &args[1..]);
+    // 起こす前に lock と突き合わせる（Follow-Ups 16 の続き）—— bundler/setup でも止まるが、
+    // それは bundler の例外とバックトレースで「`arc sync` を」とは言わない。
+    // 自動では sync しない（uv run はする）: C 拡張のコンパイルやネットワークを、run の陰で起こさない
+    if runner::goes_through_bundler(&cwd, cmd) && !synced_matches(&cwd) {
+        eprintln!("🛑 Gemfile / Gemfile.lock が、最後に通った `arc sync` と違います（または sync が通っていません）。");
+        eprintln!("   `arc sync` を実行してから撃ち直してください。");
+        std::process::exit(1);
+    }
     runner::run_with_flux(
         &project,
         "run",
